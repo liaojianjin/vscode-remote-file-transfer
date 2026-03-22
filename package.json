@@ -2,7 +2,7 @@
   "name": "vscode-remote-file-transfer",
   "displayName": "Remote File Transfer",
   "description": "Transfer medium and small files between isolated Remote-SSH windows via local staging.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "LiaoJianjin",
   "icon": "media/icon.png",
   "license": "MIT",
