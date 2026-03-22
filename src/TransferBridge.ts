@@ -193,9 +193,10 @@ async function resolveSourceMetadata(uri: vscode.Uri): Promise<SourceMetadata> {
     ? resolveDockerFriendlyName(dockerContainerId)
     : undefined;
   const remoteHost = await resolveRemoteHostname(uri, extractRemoteHost(decodedPayload));
+  const hostForDisplay = remoteHost || dockerContainerName || dockerContainerId?.slice(0, 12);
 
   return {
-    remoteHost,
+    remoteHost: hostForDisplay,
     dockerContainerId,
     dockerContainer: dockerContainerName || buildFallbackContainerLabel(remoteKind, dockerContainerId, decodedPayload)
   };
@@ -260,16 +261,19 @@ function resolveDockerFriendlyName(containerId: string): string | undefined {
   return fromPs;
 }
 
-const remoteHostCache = new Map<string, string | null>();
+const remoteHostCache = new Map<string, string>();
 
 async function resolveRemoteHostname(uri: vscode.Uri, fallback?: string): Promise<string | undefined> {
   const cacheKey = uri.authority;
-  if (remoteHostCache.has(cacheKey)) {
-    return remoteHostCache.get(cacheKey) || fallback;
+  const cached = remoteHostCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   const fromRemote = await readHostnameFromRemoteFiles(uri);
-  remoteHostCache.set(cacheKey, fromRemote || null);
+  if (fromRemote) {
+    remoteHostCache.set(cacheKey, fromRemote);
+  }
   return fromRemote || fallback;
 }
 
