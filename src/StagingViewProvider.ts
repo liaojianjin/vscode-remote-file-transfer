@@ -3,7 +3,7 @@ import { StagingEntry, StagingManager } from './StagingManager';
 
 export class StagingViewItem extends vscode.TreeItem {
   constructor(public readonly entry: StagingEntry) {
-    super(entry.filename, vscode.TreeItemCollapsibleState.None);
+    super(resolveLabel(entry), vscode.TreeItemCollapsibleState.None);
     this.id = entry.id;
     const isPlaceholder = entry.id.startsWith('__placeholder_');
     this.contextValue = isPlaceholder ? 'stagedPlaceholder' : 'stagedEntry';
@@ -68,9 +68,19 @@ function buildTooltip(entry: StagingEntry): vscode.MarkdownString {
     md.appendMarkdown(`- Docker: ${escapeMarkdown(entry.dockerContainer)}  \n`);
   }
   md.appendMarkdown(`- Path: ${escapeMarkdown(entry.path)}  \n`);
+  if (entry.rootFolderName && entry.relativePath) {
+    md.appendMarkdown(`- Relative: ${escapeMarkdown(`${entry.rootFolderName}/${entry.relativePath}`)}  \n`);
+  }
   md.appendMarkdown(`- Size: ${formatBytes(entry.size)}  \n`);
   md.appendMarkdown(`- Staged At: ${new Date(entry.timestamp).toLocaleString()}`);
   return md;
+}
+
+function resolveLabel(entry: StagingEntry): string {
+  if (entry.rootFolderName && entry.relativePath) {
+    return `${entry.rootFolderName}/${entry.relativePath}`;
+  }
+  return entry.filename;
 }
 
 function formatBytes(bytes: number): string {

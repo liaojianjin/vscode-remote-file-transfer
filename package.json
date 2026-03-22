@@ -78,7 +78,7 @@
         {
           "command": "remoteFileTransfer.stageFiles",
           "group": "navigation@80",
-          "when": "explorerViewletVisible && !explorerResourceIsFolder && (resourceScheme == file || resourceScheme == vscode-remote)"
+          "when": "explorerViewletVisible && (resourceScheme == file || resourceScheme == vscode-remote)"
         },
         {
           "command": "remoteFileTransfer.fetchFiles",

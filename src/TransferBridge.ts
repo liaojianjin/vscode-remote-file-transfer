@@ -22,11 +22,21 @@ interface HostProbeOptions {
   sshHost?: string;
   dockerContainerId?: string;
 }
+export interface StageContext {
+  batchId?: string;
+  rootFolderName?: string;
+  relativePath?: string;
+}
+type BatchRootAction = 'overwrite' | 'skip' | 'rename';
+interface BatchTargetDecision {
+  action: BatchRootAction;
+  baseUri?: vscode.Uri;
+}
 
 export class TransferBridge {
   constructor(private readonly stagingManager: StagingManager) {}
 
-  public async stageRemoteFile(uri: vscode.Uri): Promise<StagingEntry> {
+  public async stageRemoteFile(uri: vscode.Uri, context?: StageContext): Promise<StagingEntry> {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const workspaceName = vscode.workspace.getWorkspaceFolder(uri)?.name || 'Unknown';
     const filename = path.posix.basename(uri.path) || path.basename(uri.fsPath) || 'unnamed';
@@ -40,7 +50,10 @@ export class TransferBridge {
       workspaceName,
       path: uri.path,
       dockerContainer: sourceMetadata.dockerContainer,
-      dockerContainerId: sourceMetadata.dockerContainerId
+      dockerContainerId: sourceMetadata.dockerContainerId,
+      batchId: context?.batchId,
+      rootFolderName: context?.rootFolderName,
+      relativePath: context?.relativePath
     });
   }
 
@@ -68,6 +81,8 @@ export class TransferBridge {
         cancellable: false
       },
       async (progress) => {
+        const batchDecisions = new Map<string, BatchTargetDecision>();
+
         for (let i = 0; i < total; i += 1) {
           const entry = entries[i];
           progress.report({
@@ -76,10 +91,31 @@ export class TransferBridge {
           });
 
           try {
-            let targetUri = vscode.Uri.joinPath(targetFolderUri, entry.filename);
+            let targetUri: vscode.Uri;
+            let skipPerFileConflictPrompt = false;
+            if (entry.batchId && entry.rootFolderName && entry.relativePath) {
+              const decision = await this.resolveBatchTargetBase(
+                targetFolderUri,
+                entry,
+                batchDecisions
+              );
+              if (decision.action === 'skip' || !decision.baseUri) {
+                summary.skipped += 1;
+                continue;
+              }
+
+              targetUri = joinRelativePath(decision.baseUri, entry.relativePath);
+              skipPerFileConflictPrompt = decision.action === 'overwrite';
+            } else {
+              targetUri = vscode.Uri.joinPath(targetFolderUri, entry.filename);
+            }
+
+            const parentUri = parentDirectoryUri(targetUri);
+            await vscode.workspace.fs.createDirectory(parentUri);
+
             const targetExists = await this.exists(targetUri);
 
-            if (targetExists) {
+            if (targetExists && !skipPerFileConflictPrompt) {
               const action = await this.askConflictAction(entry.filename);
               if (action === 'skip') {
                 summary.skipped += 1;
@@ -94,6 +130,8 @@ export class TransferBridge {
               if (action === 'overwrite') {
                 summary.overwritten += 1;
               }
+            } else if (targetExists && skipPerFileConflictPrompt) {
+              summary.overwritten += 1;
             }
 
             const localBuffer = await this.stagingManager.readStagedBinary(entry.id);
@@ -109,6 +147,47 @@ export class TransferBridge {
         return summary;
       }
     );
+  }
+
+  private async resolveBatchTargetBase(
+    targetFolderUri: vscode.Uri,
+    entry: StagingEntry,
+    decisions: Map<string, BatchTargetDecision>
+  ): Promise<BatchTargetDecision> {
+    const batchId = entry.batchId as string;
+    const cached = decisions.get(batchId);
+    if (cached) {
+      return cached;
+    }
+
+    const originalRoot = vscode.Uri.joinPath(targetFolderUri, entry.rootFolderName as string);
+    const rootExists = await this.exists(originalRoot);
+    if (!rootExists) {
+      const decision: BatchTargetDecision = { action: 'overwrite', baseUri: originalRoot };
+      decisions.set(batchId, decision);
+      return decision;
+    }
+
+    const action = await this.askBatchRootConflictAction(entry.rootFolderName as string);
+    if (action === 'skip') {
+      const decision: BatchTargetDecision = { action: 'skip' };
+      decisions.set(batchId, decision);
+      return decision;
+    }
+
+    if (action === 'rename') {
+      const renamedRoot = await this.generateNonConflictFolderUri(
+        targetFolderUri,
+        entry.rootFolderName as string
+      );
+      const decision: BatchTargetDecision = { action: 'rename', baseUri: renamedRoot };
+      decisions.set(batchId, decision);
+      return decision;
+    }
+
+    const decision: BatchTargetDecision = { action: 'overwrite', baseUri: originalRoot };
+    decisions.set(batchId, decision);
+    return decision;
   }
 
   private async askConflictAction(filename: string): Promise<ConflictAction> {
@@ -131,6 +210,26 @@ export class TransferBridge {
     return 'skip';
   }
 
+  private async askBatchRootConflictAction(folderName: string): Promise<BatchRootAction> {
+    const selected = await vscode.window.showWarningMessage(
+      `目标位置已存在目录: ${folderName}`,
+      { modal: true },
+      '覆盖目录',
+      '跳过目录',
+      '自动重命名目录'
+    );
+
+    if (selected === '覆盖目录') {
+      return 'overwrite';
+    }
+
+    if (selected === '自动重命名目录') {
+      return 'rename';
+    }
+
+    return 'skip';
+  }
+
   private async generateNonConflictUri(baseFolder: vscode.Uri, originalName: string): Promise<vscode.Uri> {
     const parsed = path.posix.parse(originalName);
     let index = 1;
@@ -140,6 +239,21 @@ export class TransferBridge {
       const candidateUri = vscode.Uri.joinPath(baseFolder, candidateName);
       const hit = await this.exists(candidateUri);
       if (!hit) {
+        return candidateUri;
+      }
+      index += 1;
+    }
+  }
+
+  private async generateNonConflictFolderUri(
+    baseFolder: vscode.Uri,
+    originalFolderName: string
+  ): Promise<vscode.Uri> {
+    let index = 1;
+    while (true) {
+      const candidateName = `${originalFolderName} (${index})`;
+      const candidateUri = vscode.Uri.joinPath(baseFolder, candidateName);
+      if (!(await this.exists(candidateUri))) {
         return candidateUri;
       }
       index += 1;
@@ -347,6 +461,16 @@ function runCommand(command: string, args: string[], timeout: number): string | 
   } catch {
     return undefined;
   }
+}
+
+function joinRelativePath(baseUri: vscode.Uri, relativePath: string): vscode.Uri {
+  const segments = relativePath.split('/').filter(Boolean);
+  return vscode.Uri.joinPath(baseUri, ...segments);
+}
+
+function parentDirectoryUri(uri: vscode.Uri): vscode.Uri {
+  const parentPath = path.posix.dirname(uri.path);
+  return uri.with({ path: parentPath });
 }
 
 async function readHostnameFromRemoteFiles(uri: vscode.Uri): Promise<string | undefined> {

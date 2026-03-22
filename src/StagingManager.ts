@@ -26,6 +26,9 @@ export interface StagingEntry {
   path: string;
   dockerContainer?: string;
   dockerContainerId?: string;
+  batchId?: string;
+  rootFolderName?: string;
+  relativePath?: string;
   timestamp: number;
 }
 
@@ -38,6 +41,9 @@ interface StageFileInput {
   path: string;
   dockerContainer?: string;
   dockerContainerId?: string;
+  batchId?: string;
+  rootFolderName?: string;
+  relativePath?: string;
 }
 
 export class StagingManager {
@@ -77,6 +83,9 @@ export class StagingManager {
         path: metadata.path,
         dockerContainer: metadata.dockerContainer,
         dockerContainerId: metadata.dockerContainerId,
+        batchId: metadata.batchId,
+        rootFolderName: metadata.rootFolderName,
+        relativePath: metadata.relativePath,
         timestamp: Date.now()
       };
 
@@ -409,6 +418,9 @@ export class StagingManager {
       typeof entry.path === 'string' &&
       (typeof entry.dockerContainer === 'undefined' || typeof entry.dockerContainer === 'string') &&
       (typeof entry.dockerContainerId === 'undefined' || typeof entry.dockerContainerId === 'string') &&
+      (typeof entry.batchId === 'undefined' || typeof entry.batchId === 'string') &&
+      (typeof entry.rootFolderName === 'undefined' || typeof entry.rootFolderName === 'string') &&
+      (typeof entry.relativePath === 'undefined' || typeof entry.relativePath === 'string') &&
       typeof entry.timestamp === 'number'
     );
   }

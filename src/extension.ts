@@ -11,8 +11,21 @@ const CMD_DELETE_ONE = 'remoteFileTransfer.deleteSingleStagedFile';
 const CMD_REFRESH_VIEW = 'remoteFileTransfer.refreshStagingView';
 const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
 
-interface EntryQuickPickItem extends vscode.QuickPickItem {
-  entry: StagingEntry;
+interface GroupQuickPickItem extends vscode.QuickPickItem {
+  entries: StagingEntry[];
+}
+interface StageCandidate {
+  uri: vscode.Uri;
+  batchId?: string;
+  rootFolderName?: string;
+  relativePath?: string;
+}
+interface DirectoryCollectResult {
+  candidates: StageCandidate[];
+  nestedDirectories: number;
+  skippedSymlinks: number;
+  skippedUnsupported: number;
+  failed: number;
 }
 
 let deactivateState:
@@ -98,8 +111,9 @@ async function handleStageCommand(
     return;
   }
 
+  const candidates: StageCandidate[] = [];
   let success = 0;
-  let skippedDirectories = 0;
+  let processedDirectories = 0;
   let skippedSymlinks = 0;
   let skippedUnsupported = 0;
   let skippedOversize = 0;
@@ -112,13 +126,21 @@ async function handleStageCommand(
       const isSymlink = (stat.type & vscode.FileType.SymbolicLink) !== 0;
       const isFile = (stat.type & vscode.FileType.File) !== 0;
 
-      if (isDirectory) {
-        skippedDirectories += 1;
+      if (isSymlink) {
+        skippedSymlinks += 1;
         continue;
       }
 
-      if (isSymlink) {
-        skippedSymlinks += 1;
+      if (isDirectory) {
+        processedDirectories += 1;
+        const rootFolderName = basenameForUri(uri) || 'folder';
+        const batchId = randomUUID();
+        const collected = await collectFilesFromDirectory(uri, batchId, rootFolderName);
+        candidates.push(...collected.candidates);
+        processedDirectories += collected.nestedDirectories;
+        skippedSymlinks += collected.skippedSymlinks;
+        skippedUnsupported += collected.skippedUnsupported;
+        failed += collected.failed;
         continue;
       }
 
@@ -127,24 +149,38 @@ async function handleStageCommand(
         continue;
       }
 
-      if (stat.size > MAX_FILE_SIZE_BYTES) {
-        skippedOversize += 1;
-        continue;
-      }
-
-      await transferBridge.stageRemoteFile(uri);
-      success += 1;
+      candidates.push({ uri });
     } catch (error) {
       failed += 1;
       console.error('[remote-file-transfer] stage failed', uri.toString(), error);
     }
   }
 
+  for (const candidate of candidates) {
+    try {
+      const stat = await vscode.workspace.fs.stat(candidate.uri);
+      if (stat.size > MAX_FILE_SIZE_BYTES) {
+        skippedOversize += 1;
+        continue;
+      }
+
+      await transferBridge.stageRemoteFile(candidate.uri, {
+        batchId: candidate.batchId,
+        rootFolderName: candidate.rootFolderName,
+        relativePath: candidate.relativePath
+      });
+      success += 1;
+    } catch (error) {
+      failed += 1;
+      console.error('[remote-file-transfer] stage failed', candidate.uri.toString(), error);
+    }
+  }
+
   const segments: string[] = [];
   segments.push(`成功暂存 ${success} 个文件。`);
 
-  if (skippedDirectories > 0) {
-    segments.push(`已跳过 ${skippedDirectories} 个目录。`);
+  if (processedDirectories > 0) {
+    segments.push(`已处理 ${processedDirectories} 个目录。`);
   }
   if (skippedSymlinks > 0) {
     segments.push(`已跳过 ${skippedSymlinks} 个软链。`);
@@ -200,12 +236,7 @@ async function handleFetchCommand(
     return;
   }
 
-  const items: EntryQuickPickItem[] = entries.map((entry) => ({
-    label: entry.filename,
-    description: buildWorkspaceDescription(entry),
-    detail: buildEntryDetail(entry),
-    entry
-  }));
+  const items = buildGroupedQuickPickItems(entries);
 
   const picked = await vscode.window.showQuickPick(items, {
     canPickMany: true,
@@ -220,9 +251,10 @@ async function handleFetchCommand(
   }
 
   try {
+    const pickedEntries = dedupeEntriesById(picked.flatMap((item) => item.entries));
     const summary = await transferBridge.fetchEntriesToFolder(
       targetFolderUri,
-      picked.map((item) => item.entry)
+      pickedEntries
     );
 
     vscode.window.showInformationMessage(
@@ -292,12 +324,7 @@ async function handleDeleteCommand(
     return;
   }
 
-  const items: EntryQuickPickItem[] = entries.map((entry) => ({
-    label: entry.filename,
-    description: buildWorkspaceDescription(entry),
-    detail: buildEntryDetail(entry),
-    entry
-  }));
+  const items = buildGroupedQuickPickItems(entries);
 
   const picked = await vscode.window.showQuickPick(items, {
     canPickMany: true,
@@ -311,8 +338,9 @@ async function handleDeleteCommand(
     return;
   }
 
+  const selectedEntries = dedupeEntriesById(picked.flatMap((item) => item.entries));
   const confirm = await vscode.window.showWarningMessage(
-    `确定删除选中的 ${picked.length} 个暂存文件吗？`,
+    `确定删除选中的 ${selectedEntries.length} 个暂存文件吗？`,
     { modal: true },
     '删除'
   );
@@ -322,7 +350,7 @@ async function handleDeleteCommand(
   }
 
   try {
-    const result = await stagingManager.deleteEntriesByIds(picked.map((item) => item.entry.id));
+    const result = await stagingManager.deleteEntriesByIds(selectedEntries.map((item) => item.id));
     vscode.window.showInformationMessage(
       `删除完成：已删除 ${result.deleted}，未找到 ${result.notFound}。`
     );
@@ -347,6 +375,130 @@ function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vs
   return [...dedup.values()];
 }
 
+async function collectFilesFromDirectory(
+  rootUri: vscode.Uri,
+  batchId: string,
+  rootFolderName: string
+): Promise<DirectoryCollectResult> {
+  const candidates: StageCandidate[] = [];
+  let nestedDirectories = 0;
+  let skippedSymlinks = 0;
+  let skippedUnsupported = 0;
+  let failed = 0;
+
+  const stack: Array<{ uri: vscode.Uri; relativeDir: string }> = [{ uri: rootUri, relativeDir: '' }];
+
+  while (stack.length > 0) {
+    const current = stack.pop() as { uri: vscode.Uri; relativeDir: string };
+    let children: [string, vscode.FileType][];
+    try {
+      children = await vscode.workspace.fs.readDirectory(current.uri);
+    } catch (error) {
+      failed += 1;
+      console.error('[remote-file-transfer] readDirectory failed', current.uri.toString(), error);
+      continue;
+    }
+
+    for (const [name, fileType] of children) {
+      const isSymlink = (fileType & vscode.FileType.SymbolicLink) !== 0;
+      const isDirectory = (fileType & vscode.FileType.Directory) !== 0;
+      const isFile = (fileType & vscode.FileType.File) !== 0;
+      const relativePath = current.relativeDir ? `${current.relativeDir}/${name}` : name;
+      const childUri = vscode.Uri.joinPath(current.uri, name);
+
+      if (isSymlink) {
+        skippedSymlinks += 1;
+        continue;
+      }
+
+      if (isDirectory) {
+        nestedDirectories += 1;
+        stack.push({ uri: childUri, relativeDir: relativePath });
+        continue;
+      }
+
+      if (isFile) {
+        candidates.push({
+          uri: childUri,
+          batchId,
+          rootFolderName,
+          relativePath
+        });
+        continue;
+      }
+
+      skippedUnsupported += 1;
+    }
+  }
+
+  return {
+    candidates,
+    nestedDirectories,
+    skippedSymlinks,
+    skippedUnsupported,
+    failed
+  };
+}
+
+function basenameForUri(uri: vscode.Uri): string {
+  const trimmed = uri.path.replace(/\/+$/, '');
+  const index = trimmed.lastIndexOf('/');
+  if (index >= 0 && index < trimmed.length - 1) {
+    return trimmed.slice(index + 1);
+  }
+  return trimmed || 'folder';
+}
+
+function buildGroupedQuickPickItems(entries: StagingEntry[]): GroupQuickPickItem[] {
+  const batchGroups = new Map<string, StagingEntry[]>();
+  const standalone: StagingEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.batchId && entry.rootFolderName && entry.relativePath) {
+      const group = batchGroups.get(entry.batchId) ?? [];
+      group.push(entry);
+      batchGroups.set(entry.batchId, group);
+    } else {
+      standalone.push(entry);
+    }
+  }
+
+  const items: GroupQuickPickItem[] = [];
+
+  for (const groupEntries of batchGroups.values()) {
+    const first = groupEntries[0];
+    items.push({
+      label: `📁 ${first.rootFolderName}`,
+      description: `${buildWorkspaceDescription(first)} | ${groupEntries.length} files`,
+      detail: `${first.remoteAuthority} | 目录批次`,
+      entries: groupEntries
+    });
+  }
+
+  for (const entry of standalone) {
+    items.push({
+      label: entry.filename,
+      description: buildWorkspaceDescription(entry),
+      detail: buildEntryDetail(entry),
+      entries: [entry]
+    });
+  }
+
+  return items.sort((a, b) => {
+    const aTimestamp = Math.max(...a.entries.map((entry) => entry.timestamp));
+    const bTimestamp = Math.max(...b.entries.map((entry) => entry.timestamp));
+    return bTimestamp - aTimestamp;
+  });
+}
+
+function dedupeEntriesById(entries: StagingEntry[]): StagingEntry[] {
+  const map = new Map<string, StagingEntry>();
+  for (const entry of entries) {
+    map.set(entry.id, entry);
+  }
+  return [...map.values()];
+}
+
 function buildWorkspaceDescription(entry: StagingEntry): string {
   const segments = [entry.workspaceName];
   const host = resolveHostForDisplay(entry);
@@ -362,6 +514,9 @@ function buildWorkspaceDescription(entry: StagingEntry): string {
 function buildEntryDetail(entry: StagingEntry): string {
   const base = `${entry.remoteAuthority}${entry.path}`;
   const segments = [base];
+  if (entry.rootFolderName && entry.relativePath) {
+    segments.push(`目录: ${entry.rootFolderName}/${entry.relativePath}`);
+  }
   const host = resolveHostForDisplay(entry);
   if (host) {
     segments.push(`主机: ${host}`);

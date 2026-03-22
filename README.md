@@ -6,7 +6,7 @@
 
 - 不使用 WebSocket、本地端口、任何自定义网络协议。
 - 插件强制运行在 UI 侧（本地机器），共享本地硬盘作为暂存池。
-- 仅支持单文件传输（MVP），不处理目录递归。
+- 支持单文件与目录（递归）传输。
 
 ## 核心架构
 
@@ -23,8 +23,14 @@
   filename: string,
   size: number,
   remoteAuthority: string,
+  remoteHost?: string,
   workspaceName: string,
   path: string,
+  dockerContainer?: string,
+  dockerContainerId?: string,
+  batchId?: string,
+  rootFolderName?: string,
+  relativePath?: string,
   timestamp: number
 }
 ```
@@ -37,9 +43,10 @@
 
 ### 1) 暂存文件（📤 暂存到全局池）
 
-- 入口：资源管理器右键文件。
+- 入口：资源管理器右键文件或目录。
 - 支持多选。
-- 自动过滤目录/软链。
+- 目录会递归扫描并暂存目录内文件，自动保留相对路径。
+- 自动过滤软链。
 - 文件大小上限：`50MB`（`MAX_FILE_SIZE_MB`）。
 - 读取远端文件：`vscode.workspace.fs.readFile`（`Uint8Array`）。
 - 写入本地缓存：按二进制写入 UUID 文件，不做文本编码转换。
@@ -49,9 +56,9 @@
 
 - 入口：资源管理器右键目标目录。
 - 使用 `QuickPick(canPickMany)` 选择待拉取项。
-  - `label = filename`
-  - `description = workspaceName`
-  - `detail = remoteAuthority + path`
+  - 文件项按单文件展示
+  - 目录项会聚合为一个可选批次（显示文件数量）
+- 目录拉取会自动重建原始目录结构。
 - 冲突处理：`覆盖 / 跳过 / 自动重命名`
 - 写入目标：`vscode.workspace.fs.writeFile`
 - 使用 `withProgress` 展示进度。
@@ -129,7 +136,6 @@ npm run package
 
 ## 注意事项
 
-- 当前为 MVP，仅处理单文件。
 - 大文件（>50MB）会被拦截。
 - 建议后续增加 `.vscodeignore` 或 `package.json.files` 以缩小 VSIX 体积。
 
