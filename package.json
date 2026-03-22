@@ -1,0 +1,60 @@
+{
+  "name": "vscode-remote-file-transfer",
+  "displayName": "Remote File Transfer",
+  "description": "Transfer medium and small files between isolated Remote-SSH windows via local staging.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "scripts": {
+    "clean": "rm -rf out",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node --test \"out/test/**/*.test.js\""
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onCommand:remoteFileTransfer.stageFiles",
+    "onCommand:remoteFileTransfer.fetchFiles"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "remoteFileTransfer.stageFiles",
+        "title": "📤 暂存到全局池"
+      },
+      {
+        "command": "remoteFileTransfer.fetchFiles",
+        "title": "📥 从全局池拉取..."
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "remoteFileTransfer.stageFiles",
+          "group": "navigation@80",
+          "when": "explorerResourceIsFile"
+        },
+        {
+          "command": "remoteFileTransfer.fetchFiles",
+          "group": "navigation@81",
+          "when": "explorerResourceIsFolder"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.8.3"
+  }
+}
