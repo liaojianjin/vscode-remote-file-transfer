@@ -25,7 +25,7 @@ export class TransferBridge {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const workspaceName = vscode.workspace.getWorkspaceFolder(uri)?.name || 'Unknown';
     const filename = path.posix.basename(uri.path) || path.basename(uri.fsPath) || 'unnamed';
-    const sourceMetadata = resolveSourceMetadata(uri.authority);
+    const sourceMetadata = await resolveSourceMetadata(uri);
 
     return this.stagingManager.stageBinaryFile(bytes, {
       filename,
@@ -160,32 +160,39 @@ function isNotFoundError(error: unknown): boolean {
   return code === 'FileNotFound' || message.includes('not found') || message.includes('no such file');
 }
 
-function resolveSourceMetadata(authority: string): SourceMetadata {
+async function resolveSourceMetadata(uri: vscode.Uri): Promise<SourceMetadata> {
+  const authority = uri.authority;
   const plusIndex = authority.indexOf('+');
   if (plusIndex <= 0 || plusIndex >= authority.length - 1) {
-    return {};
+    return {
+      remoteHost: await resolveRemoteHostname(uri)
+    };
   }
 
   const remoteKind = authority.slice(0, plusIndex);
   const rawPayload = authority.slice(plusIndex + 1);
   const decodedPayload = safeDecode(rawPayload).split('?')[0].trim();
   if (!decodedPayload) {
-    return {};
+    return {
+      remoteHost: await resolveRemoteHostname(uri)
+    };
   }
 
   if (remoteKind === 'ssh-remote') {
-    return { remoteHost: decodedPayload };
+    return { remoteHost: await resolveRemoteHostname(uri, decodedPayload) };
   }
 
   if (remoteKind !== 'attached-container' && remoteKind !== 'dev-container') {
-    return {};
+    return {
+      remoteHost: await resolveRemoteHostname(uri)
+    };
   }
 
   const dockerContainerId = extractContainerId(decodedPayload);
   const dockerContainerName = dockerContainerId
     ? resolveDockerFriendlyName(dockerContainerId)
     : undefined;
-  const remoteHost = extractRemoteHost(decodedPayload);
+  const remoteHost = await resolveRemoteHostname(uri, extractRemoteHost(decodedPayload));
 
   return {
     remoteHost,
@@ -251,6 +258,36 @@ function resolveDockerFriendlyName(containerId: string): string | undefined {
   const fromPs = resolveDockerNameFromPs(containerId);
   dockerNameCache.set(containerId, fromPs || null);
   return fromPs;
+}
+
+const remoteHostCache = new Map<string, string | null>();
+
+async function resolveRemoteHostname(uri: vscode.Uri, fallback?: string): Promise<string | undefined> {
+  const cacheKey = uri.authority;
+  if (remoteHostCache.has(cacheKey)) {
+    return remoteHostCache.get(cacheKey) || fallback;
+  }
+
+  const fromRemote = await readHostnameFromRemoteFiles(uri);
+  remoteHostCache.set(cacheKey, fromRemote || null);
+  return fromRemote || fallback;
+}
+
+async function readHostnameFromRemoteFiles(uri: vscode.Uri): Promise<string | undefined> {
+  const candidates = ['/etc/hostname', '/proc/sys/kernel/hostname'];
+  for (const candidatePath of candidates) {
+    try {
+      const candidateUri = uri.with({ path: candidatePath, query: '', fragment: '' });
+      const bytes = await vscode.workspace.fs.readFile(candidateUri);
+      const value = Buffer.from(bytes).toString('utf-8').trim().split(/\r?\n/)[0]?.trim();
+      if (value) {
+        return value;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return undefined;
 }
 
 function inspectDockerName(containerId: string): string | undefined {
