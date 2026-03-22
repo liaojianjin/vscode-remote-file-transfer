@@ -35,11 +35,13 @@
     "commands": [
       {
         "command": "remoteFileTransfer.stageFiles",
-        "title": "📤 暂存到全局池"
+        "title": "📤 暂存到全局池",
+        "category": "Remote File Transfer"
       },
       {
         "command": "remoteFileTransfer.fetchFiles",
-        "title": "📥 从全局池拉取..."
+        "title": "📥 从全局池拉取...",
+        "category": "Remote File Transfer"
       }
     ],
     "menus": {
@@ -47,12 +49,22 @@
         {
           "command": "remoteFileTransfer.stageFiles",
           "group": "navigation@80",
-          "when": "explorerResourceIsFile"
+          "when": "explorerViewletVisible && !explorerResourceIsFolder && (resourceScheme == file || resourceScheme == vscode-remote)"
         },
         {
           "command": "remoteFileTransfer.fetchFiles",
           "group": "navigation@81",
-          "when": "explorerResourceIsFolder"
+          "when": "explorerViewletVisible && explorerResourceIsFolder && (resourceScheme == file || resourceScheme == vscode-remote)"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "remoteFileTransfer.stageFiles",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote"
+        },
+        {
+          "command": "remoteFileTransfer.fetchFiles",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote"
         }
       ]
     }
