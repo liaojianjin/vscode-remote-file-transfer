@@ -17,6 +17,11 @@ interface SourceMetadata {
   dockerContainer?: string;
   dockerContainerId?: string;
 }
+interface HostProbeOptions {
+  remoteKind?: string;
+  sshHost?: string;
+  dockerContainerId?: string;
+}
 
 export class TransferBridge {
   constructor(private readonly stagingManager: StagingManager) {}
@@ -165,7 +170,7 @@ async function resolveSourceMetadata(uri: vscode.Uri): Promise<SourceMetadata> {
   const plusIndex = authority.indexOf('+');
   if (plusIndex <= 0 || plusIndex >= authority.length - 1) {
     return {
-      remoteHost: await resolveRemoteHostname(uri)
+      remoteHost: await resolveRemoteHostname(uri, {})
     };
   }
 
@@ -174,17 +179,23 @@ async function resolveSourceMetadata(uri: vscode.Uri): Promise<SourceMetadata> {
   const decodedPayload = safeDecode(rawPayload).split('?')[0].trim();
   if (!decodedPayload) {
     return {
-      remoteHost: await resolveRemoteHostname(uri)
+      remoteHost: await resolveRemoteHostname(uri, {})
     };
   }
 
   if (remoteKind === 'ssh-remote') {
-    return { remoteHost: await resolveRemoteHostname(uri, decodedPayload) };
+    return {
+      remoteHost: await resolveRemoteHostname(
+        uri,
+        { remoteKind, sshHost: decodedPayload },
+        decodedPayload
+      )
+    };
   }
 
   if (remoteKind !== 'attached-container' && remoteKind !== 'dev-container') {
     return {
-      remoteHost: await resolveRemoteHostname(uri)
+      remoteHost: await resolveRemoteHostname(uri, { remoteKind })
     };
   }
 
@@ -192,7 +203,11 @@ async function resolveSourceMetadata(uri: vscode.Uri): Promise<SourceMetadata> {
   const dockerContainerName = dockerContainerId
     ? resolveDockerFriendlyName(dockerContainerId)
     : undefined;
-  const remoteHost = await resolveRemoteHostname(uri, extractRemoteHost(decodedPayload));
+  const remoteHost = await resolveRemoteHostname(
+    uri,
+    { remoteKind, dockerContainerId },
+    extractRemoteHost(decodedPayload)
+  );
   const hostForDisplay = remoteHost || dockerContainerName || dockerContainerId?.slice(0, 12);
 
   return {
@@ -263,11 +278,21 @@ function resolveDockerFriendlyName(containerId: string): string | undefined {
 
 const remoteHostCache = new Map<string, string>();
 
-async function resolveRemoteHostname(uri: vscode.Uri, fallback?: string): Promise<string | undefined> {
+async function resolveRemoteHostname(
+  uri: vscode.Uri,
+  probeOptions: HostProbeOptions,
+  fallback?: string
+): Promise<string | undefined> {
   const cacheKey = uri.authority;
   const cached = remoteHostCache.get(cacheKey);
   if (cached) {
     return cached;
+  }
+
+  const fromCommand = runHostnameCommand(probeOptions);
+  if (fromCommand) {
+    remoteHostCache.set(cacheKey, fromCommand);
+    return fromCommand;
   }
 
   const fromRemote = await readHostnameFromRemoteFiles(uri);
@@ -275,6 +300,46 @@ async function resolveRemoteHostname(uri: vscode.Uri, fallback?: string): Promis
     remoteHostCache.set(cacheKey, fromRemote);
   }
   return fromRemote || fallback;
+}
+
+function runHostnameCommand(options: HostProbeOptions): string | undefined {
+  if (options.dockerContainerId) {
+    const viaDocker = runCommand(
+      'docker',
+      ['exec', options.dockerContainerId, 'hostname'],
+      1500
+    );
+    if (viaDocker) {
+      return viaDocker;
+    }
+  }
+
+  if (options.sshHost) {
+    const viaSsh = runCommand(
+      'ssh',
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2', options.sshHost, 'hostname'],
+      2500
+    );
+    if (viaSsh) {
+      return viaSsh;
+    }
+  }
+
+  return undefined;
+}
+
+function runCommand(command: string, args: string[], timeout: number): string | undefined {
+  try {
+    const output = execFileSync(command, args, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout
+    });
+    const value = output.trim().split(/\r?\n/)[0]?.trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readHostnameFromRemoteFiles(uri: vscode.Uri): Promise<string | undefined> {
