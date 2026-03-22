@@ -239,3 +239,34 @@ test('persists remote host and docker source metadata', async (t) => {
   assert.equal(list[0].dockerContainer, 'payments-api');
   assert.ok(list[0].dockerContainerId?.startsWith('9f8a7b6c5d4e'));
 });
+
+test('first session registration clears leftover staged files, later sessions do not', async (t) => {
+  const poolName = createPoolName();
+  t.after(() => cleanupPool(poolName));
+
+  const manager = new StagingManager(poolName);
+  await manager.stageBinaryFile(new Uint8Array([1]), {
+    filename: 'leftover.bin',
+    size: 1,
+    remoteAuthority: 'ssh-remote+alpha',
+    workspaceName: 'ws-a',
+    path: '/tmp/leftover.bin'
+  });
+
+  await manager.registerSession('session-1');
+  let list = await manager.listEntries();
+  assert.equal(list.length, 0);
+
+  await manager.stageBinaryFile(new Uint8Array([2]), {
+    filename: 'active.bin',
+    size: 1,
+    remoteAuthority: 'ssh-remote+alpha',
+    workspaceName: 'ws-a',
+    path: '/tmp/active.bin'
+  });
+
+  await manager.registerSession('session-2');
+  list = await manager.listEntries();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].filename, 'active.bin');
+});

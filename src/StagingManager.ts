@@ -136,6 +136,10 @@ export class StagingManager {
     return this.withLock(() => {
       this.ensureStorageReady();
       this.cleanupStaleSessionsSync();
+      const isFirstSession = this.listSessionFilesSync().length === 0;
+      if (isFirstSession) {
+        this.clearAllEntriesSync();
+      }
       const sessionFilePath = this.getSessionFilePath(sessionId);
       fs.writeFileSync(sessionFilePath, String(Date.now()), 'utf-8');
     });
