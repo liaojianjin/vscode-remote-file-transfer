@@ -79,7 +79,8 @@
 - 当文件来自 `attached-container` 或 `dev-container` 类型远程环境时，会在暂存记录中写入 `dockerContainer` 字段。
 - 解析逻辑会优先尝试本地 `docker inspect` / `docker ps` 获取容器友好名。
 - 在拉取和删除的 QuickPick 列表中会显示 `Host + Docker` 来源信息，便于区分来源主机与容器。
-- `Host` 会在暂存时优先尝试执行 `hostname`（SSH 场景走 `ssh <host> hostname`，容器场景走 `docker exec <container> hostname`），失败后回退读取 `/etc/hostname` 与 `/proc/sys/kernel/hostname`。
+- `Host` 会在暂存时优先尝试执行 `hostname`（本地窗口直接执行本机 `hostname`，SSH 场景走 `ssh <host> hostname`，容器场景走 `docker exec <container> hostname`），失败后回退读取 `/etc/hostname` 与 `/proc/sys/kernel/hostname`。
+- 若仍无法得到主机名，界面不会显示 `Host` 字段（不展示 `Unknown`）。
 
 ## 并发与可靠性
 

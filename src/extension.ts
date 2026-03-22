@@ -349,7 +349,10 @@ function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vs
 
 function buildWorkspaceDescription(entry: StagingEntry): string {
   const segments = [entry.workspaceName];
-  segments.push(`Host: ${resolveHostForDisplay(entry)}`);
+  const host = resolveHostForDisplay(entry);
+  if (host) {
+    segments.push(`Host: ${host}`);
+  }
   if (entry.dockerContainer) {
     segments.push(`Docker: ${entry.dockerContainer}`);
   }
@@ -359,14 +362,17 @@ function buildWorkspaceDescription(entry: StagingEntry): string {
 function buildEntryDetail(entry: StagingEntry): string {
   const base = `${entry.remoteAuthority}${entry.path}`;
   const segments = [base];
-  segments.push(`主机: ${resolveHostForDisplay(entry)}`);
+  const host = resolveHostForDisplay(entry);
+  if (host) {
+    segments.push(`主机: ${host}`);
+  }
   if (entry.dockerContainer) {
     segments.push(`容器: ${entry.dockerContainer}`);
   }
   return segments.join(' | ');
 }
 
-function resolveHostForDisplay(entry: StagingEntry): string {
+function resolveHostForDisplay(entry: StagingEntry): string | undefined {
   if (entry.remoteHost && entry.remoteHost.trim()) {
     return entry.remoteHost;
   }
@@ -386,7 +392,7 @@ function resolveHostForDisplay(entry: StagingEntry): string {
     }
   }
 
-  return 'Unknown';
+  return undefined;
 }
 
 function safeDecode(value: string): string {

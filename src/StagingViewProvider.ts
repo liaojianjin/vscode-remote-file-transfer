@@ -45,7 +45,10 @@ export class StagingViewProvider implements vscode.TreeDataProvider<StagingViewI
 
 function buildDescription(entry: StagingEntry): string {
   const segments = [entry.workspaceName];
-  segments.push(`Host: ${resolveHostForDisplay(entry)}`);
+  const host = resolveHostForDisplay(entry);
+  if (host) {
+    segments.push(`Host: ${host}`);
+  }
   if (entry.dockerContainer) {
     segments.push(`Docker: ${entry.dockerContainer}`);
   }
@@ -57,7 +60,10 @@ function buildTooltip(entry: StagingEntry): vscode.MarkdownString {
   md.appendMarkdown(`**${escapeMarkdown(entry.filename)}**  \n`);
   md.appendMarkdown(`- Workspace: ${escapeMarkdown(entry.workspaceName)}  \n`);
   md.appendMarkdown(`- Authority: ${escapeMarkdown(entry.remoteAuthority)}  \n`);
-  md.appendMarkdown(`- Host: ${escapeMarkdown(resolveHostForDisplay(entry))}  \n`);
+  const host = resolveHostForDisplay(entry);
+  if (host) {
+    md.appendMarkdown(`- Host: ${escapeMarkdown(host)}  \n`);
+  }
   if (entry.dockerContainer) {
     md.appendMarkdown(`- Docker: ${escapeMarkdown(entry.dockerContainer)}  \n`);
   }
@@ -85,7 +91,7 @@ function escapeMarkdown(value: string): string {
     .replace(/`/g, '\\`');
 }
 
-function resolveHostForDisplay(entry: StagingEntry): string {
+function resolveHostForDisplay(entry: StagingEntry): string | undefined {
   if (entry.remoteHost && entry.remoteHost.trim()) {
     return entry.remoteHost;
   }
@@ -105,7 +111,7 @@ function resolveHostForDisplay(entry: StagingEntry): string {
     }
   }
 
-  return 'Unknown';
+  return undefined;
 }
 
 function safeDecode(value: string): string {

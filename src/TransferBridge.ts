@@ -208,10 +208,9 @@ async function resolveSourceMetadata(uri: vscode.Uri): Promise<SourceMetadata> {
     { remoteKind, dockerContainerId },
     extractRemoteHost(decodedPayload)
   );
-  const hostForDisplay = remoteHost || dockerContainerName || dockerContainerId?.slice(0, 12);
 
   return {
-    remoteHost: hostForDisplay,
+    remoteHost,
     dockerContainerId,
     dockerContainer: dockerContainerName || buildFallbackContainerLabel(remoteKind, dockerContainerId, decodedPayload)
   };
@@ -293,6 +292,14 @@ async function resolveRemoteHostname(
   if (fromCommand) {
     remoteHostCache.set(cacheKey, fromCommand);
     return fromCommand;
+  }
+
+  if (uri.scheme === 'file') {
+    const localHost = runCommand('hostname', [], 800);
+    if (localHost) {
+      remoteHostCache.set(cacheKey, localHost);
+      return localHost;
+    }
   }
 
   const fromRemote = await readHostnameFromRemoteFiles(uri);
