@@ -31,7 +31,10 @@
   "activationEvents": [
     "onCommand:remoteFileTransfer.stageFiles",
     "onCommand:remoteFileTransfer.fetchFiles",
-    "onCommand:remoteFileTransfer.deleteStagedFiles"
+    "onCommand:remoteFileTransfer.deleteStagedFiles",
+    "onCommand:remoteFileTransfer.deleteSingleStagedFile",
+    "onCommand:remoteFileTransfer.refreshStagingView",
+    "onView:remoteFileTransfer.stagingView"
   ],
   "contributes": {
     "commands": [
@@ -49,8 +52,27 @@
         "command": "remoteFileTransfer.deleteStagedFiles",
         "title": "🗑️ 删除全局池文件...",
         "category": "Remote File Transfer"
+      },
+      {
+        "command": "remoteFileTransfer.deleteSingleStagedFile",
+        "title": "🗑️ 删除该暂存文件",
+        "category": "Remote File Transfer"
+      },
+      {
+        "command": "remoteFileTransfer.refreshStagingView",
+        "title": "刷新暂存池视图",
+        "icon": "$(refresh)",
+        "category": "Remote File Transfer"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "remoteFileTransfer.stagingView",
+          "name": "Global Staging Pool"
+        }
+      ]
+    },
     "menus": {
       "explorer/context": [
         {
@@ -69,6 +91,25 @@
           "when": "explorerViewletVisible && (resourceScheme == file || resourceScheme == vscode-remote)"
         }
       ],
+      "view/title": [
+        {
+          "command": "remoteFileTransfer.refreshStagingView",
+          "when": "view == remoteFileTransfer.stagingView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "remoteFileTransfer.deleteStagedFiles",
+          "when": "view == remoteFileTransfer.stagingView",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "remoteFileTransfer.deleteSingleStagedFile",
+          "when": "view == remoteFileTransfer.stagingView && viewItem == stagedEntry",
+          "group": "inline@1"
+        }
+      ],
       "commandPalette": [
         {
           "command": "remoteFileTransfer.stageFiles",
@@ -80,6 +121,10 @@
         },
         {
           "command": "remoteFileTransfer.deleteStagedFiles",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote"
+        },
+        {
+          "command": "remoteFileTransfer.refreshStagingView",
           "when": "resourceScheme == file || resourceScheme == vscode-remote"
         }
       ]

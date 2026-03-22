@@ -66,6 +66,14 @@
   - `staging.json` 记录
   - 本地 UUID 物理缓存文件
 
+### 4) 暂存池专属视图（Explorer）
+
+- 在 Explorer 中提供 `Global Staging Pool` 专属 View，实时展示全部暂存文件。
+- 视图标题支持：
+  - 刷新
+  - 删除全局池文件
+- 视图条目支持右键删除单个暂存文件。
+
 ### Docker 容器标识
 
 - 当文件来自 `attached-container` 或 `dev-container` 类型远程环境时，会在暂存记录中写入 `dockerContainer` 字段。
@@ -83,6 +91,9 @@
   4. `fs.closeSync(fd)`
   5. `fs.renameSync(tmpPath, realPath)`
 - TTL 清理：默认 `24h`，同时清理未被 `staging.json` 引用的孤儿物理文件。
+- 会话生命周期清理：
+  - 每个 VS Code 窗口会在本地注册会话并心跳续期。
+  - 当最后一个 VS Code 窗口关闭（无活动会话）时，自动清空全部暂存文件。
 
 ## 项目结构
 

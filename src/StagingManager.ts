@@ -13,6 +13,8 @@ const LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
 const LOCK_RETRY_INTERVAL_MS = 120;
 const STAGING_POOL_NAME = 'vscode-remote-file-transfer';
 const STAGING_DB_FILENAME = 'staging.json';
+const SESSIONS_DIR_NAME = 'sessions';
+const SESSION_STALE_MS = 90_000;
 
 export interface StagingEntry {
   id: string;
@@ -43,12 +45,14 @@ export class StagingManager {
   private readonly stagingFilesDir: string;
   private readonly dbPath: string;
   private readonly lockPath: string;
+  private readonly sessionsDir: string;
 
   constructor(poolName = STAGING_POOL_NAME) {
     this.stagingRootDir = path.join(os.tmpdir(), poolName);
     this.stagingFilesDir = path.join(this.stagingRootDir, 'files');
     this.dbPath = path.join(this.stagingRootDir, STAGING_DB_FILENAME);
     this.lockPath = path.join(this.stagingRootDir, '.lock');
+    this.sessionsDir = path.join(this.stagingRootDir, SESSIONS_DIR_NAME);
   }
 
   public async stageBinaryFile(data: Uint8Array, metadata: StageFileInput): Promise<StagingEntry> {
@@ -128,6 +132,44 @@ export class StagingManager {
     });
   }
 
+  public async registerSession(sessionId: string): Promise<void> {
+    return this.withLock(() => {
+      this.ensureStorageReady();
+      this.cleanupStaleSessionsSync();
+      const sessionFilePath = this.getSessionFilePath(sessionId);
+      fs.writeFileSync(sessionFilePath, String(Date.now()), 'utf-8');
+    });
+  }
+
+  public async touchSession(sessionId: string): Promise<void> {
+    return this.withLock(() => {
+      this.ensureStorageReady();
+      const sessionFilePath = this.getSessionFilePath(sessionId);
+      const now = new Date();
+      if (!fs.existsSync(sessionFilePath)) {
+        fs.writeFileSync(sessionFilePath, String(Date.now()), 'utf-8');
+      } else {
+        fs.utimesSync(sessionFilePath, now, now);
+      }
+      this.cleanupStaleSessionsSync();
+    });
+  }
+
+  public async unregisterSessionAndCleanupIfLast(sessionId: string): Promise<boolean> {
+    return this.withLock(() => {
+      this.ensureStorageReady();
+      this.safeRemoveFile(this.getSessionFilePath(sessionId));
+      this.cleanupStaleSessionsSync();
+
+      if (this.listSessionFilesSync().length > 0) {
+        return false;
+      }
+
+      this.clearAllEntriesSync();
+      return true;
+    });
+  }
+
   public async deleteEntriesByIds(ids: string[]): Promise<{ deleted: number; notFound: number }> {
     return this.withLock(() => {
       this.ensureStorageReady();
@@ -164,24 +206,14 @@ export class StagingManager {
     return this.withLock(() => {
       this.ensureStorageReady();
       this.cleanupExpiredAndOrphansSync();
-
-      const entries = this.readDbSync();
-      if (entries.length === 0) {
-        return 0;
-      }
-
-      for (const entry of entries) {
-        this.safeRemoveFile(this.getPhysicalFilePath(entry.id));
-      }
-
-      this.writeDbSync([]);
-      return entries.length;
+      return this.clearAllEntriesSync();
     });
   }
 
   private ensureStorageReady(): void {
     fs.mkdirSync(this.stagingRootDir, { recursive: true });
     fs.mkdirSync(this.stagingFilesDir, { recursive: true });
+    fs.mkdirSync(this.sessionsDir, { recursive: true });
 
     if (!fs.existsSync(this.dbPath)) {
       this.writeDbSync([]);
@@ -286,6 +318,10 @@ export class StagingManager {
     return path.join(this.stagingFilesDir, id);
   }
 
+  private getSessionFilePath(sessionId: string): string {
+    return path.join(this.sessionsDir, `${sessionId}.session`);
+  }
+
   private async withLock<T>(task: () => T | Promise<T>): Promise<T> {
     await this.acquireLock();
     try {
@@ -379,6 +415,53 @@ export class StagingManager {
     } catch {
       // ignore
     }
+  }
+
+  private clearAllEntriesSync(): number {
+    const entries = this.readDbSync();
+    if (entries.length === 0) {
+      return 0;
+    }
+
+    for (const entry of entries) {
+      this.safeRemoveFile(this.getPhysicalFilePath(entry.id));
+    }
+
+    this.writeDbSync([]);
+    return entries.length;
+  }
+
+  private cleanupStaleSessionsSync(): void {
+    for (const filename of this.listSessionFilesSync()) {
+      const sessionPath = path.join(this.sessionsDir, filename);
+      try {
+        const stat = fs.statSync(sessionPath);
+        const isStale = Date.now() - stat.mtimeMs > SESSION_STALE_MS;
+        if (isStale) {
+          this.safeRemoveFile(sessionPath);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private listSessionFilesSync(): string[] {
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(this.sessionsDir);
+    } catch {
+      return [];
+    }
+
+    return files.filter((filename) => {
+      const filePath = path.join(this.sessionsDir, filename);
+      try {
+        return fs.statSync(filePath).isFile() && filename.endsWith('.session');
+      } catch {
+        return false;
+      }
+    });
   }
 }
 

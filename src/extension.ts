@@ -1,27 +1,57 @@
 import * as vscode from 'vscode';
+import { randomUUID } from 'node:crypto';
 import { MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB, StagingEntry, StagingManager } from './StagingManager';
 import { TransferBridge } from './TransferBridge';
+import { StagingViewItem, StagingViewProvider } from './StagingViewProvider';
 
 const CMD_STAGE = 'remoteFileTransfer.stageFiles';
 const CMD_FETCH = 'remoteFileTransfer.fetchFiles';
 const CMD_DELETE = 'remoteFileTransfer.deleteStagedFiles';
+const CMD_DELETE_ONE = 'remoteFileTransfer.deleteSingleStagedFile';
+const CMD_REFRESH_VIEW = 'remoteFileTransfer.refreshStagingView';
+const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
 
 interface EntryQuickPickItem extends vscode.QuickPickItem {
   entry: StagingEntry;
 }
 
+let deactivateState:
+  | {
+      stagingManager: StagingManager;
+      sessionId: string;
+      heartbeatTimer: NodeJS.Timeout;
+    }
+  | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
   const stagingManager = new StagingManager();
   const transferBridge = new TransferBridge(stagingManager);
+  const stagingViewProvider = new StagingViewProvider(stagingManager);
+  const stagingTreeView = vscode.window.createTreeView('remoteFileTransfer.stagingView', {
+    treeDataProvider: stagingViewProvider,
+    canSelectMany: true
+  });
 
   void stagingManager.cleanupExpiredAndOrphans().catch((error) => {
     console.error('[remote-file-transfer] cleanup on activate failed', error);
   });
+  stagingViewProvider.refresh();
+
+  const sessionId = randomUUID();
+  void stagingManager.registerSession(sessionId).catch((error) => {
+    console.error('[remote-file-transfer] session register failed', error);
+  });
+  const heartbeatTimer = setInterval(() => {
+    void stagingManager.touchSession(sessionId).catch((error) => {
+      console.error('[remote-file-transfer] session heartbeat failed', error);
+    });
+  }, SESSION_HEARTBEAT_INTERVAL_MS);
+  deactivateState = { stagingManager, sessionId, heartbeatTimer };
 
   const stageDisposable = vscode.commands.registerCommand(
     CMD_STAGE,
     async (clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]) => {
-      await handleStageCommand(transferBridge, clickedUri, selectedUris);
+      await handleStageCommand(transferBridge, stagingViewProvider, clickedUri, selectedUris);
     }
   );
 
@@ -30,14 +60,35 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   const deleteDisposable = vscode.commands.registerCommand(CMD_DELETE, async () => {
-    await handleDeleteCommand(stagingManager);
+    await handleDeleteCommand(stagingManager, stagingViewProvider);
   });
 
-  context.subscriptions.push(stageDisposable, fetchDisposable, deleteDisposable);
+  const deleteOneDisposable = vscode.commands.registerCommand(
+    CMD_DELETE_ONE,
+    async (item?: StagingViewItem, selectedItems?: StagingViewItem[]) => {
+      const targets = collectViewSelection(item, selectedItems, stagingTreeView.selection);
+      await handleDeleteFromViewCommand(stagingManager, stagingViewProvider, targets);
+    }
+  );
+
+  const refreshViewDisposable = vscode.commands.registerCommand(CMD_REFRESH_VIEW, () => {
+    stagingViewProvider.refresh();
+  });
+
+  context.subscriptions.push(
+    stageDisposable,
+    fetchDisposable,
+    deleteDisposable,
+    deleteOneDisposable,
+    refreshViewDisposable,
+    stagingTreeView,
+    new vscode.Disposable(() => clearInterval(heartbeatTimer))
+  );
 }
 
 async function handleStageCommand(
   transferBridge: TransferBridge,
+  stagingViewProvider: StagingViewProvider,
   clickedUri?: vscode.Uri,
   selectedUris?: vscode.Uri[]
 ): Promise<void> {
@@ -109,6 +160,9 @@ async function handleStageCommand(
   }
 
   vscode.window.showInformationMessage(segments.join(' '));
+  if (success > 0) {
+    stagingViewProvider.refresh();
+  }
 }
 
 async function handleFetchCommand(
@@ -179,7 +233,10 @@ async function handleFetchCommand(
   }
 }
 
-async function handleDeleteCommand(stagingManager: StagingManager): Promise<void> {
+async function handleDeleteCommand(
+  stagingManager: StagingManager,
+  stagingViewProvider: StagingViewProvider
+): Promise<void> {
   let entries: StagingEntry[] = [];
   try {
     entries = await stagingManager.listEntries();
@@ -228,6 +285,7 @@ async function handleDeleteCommand(stagingManager: StagingManager): Promise<void
     try {
       const deletedCount = await stagingManager.clearAllEntries();
       vscode.window.showInformationMessage(`已删除 ${deletedCount} 个暂存文件。`);
+      stagingViewProvider.refresh();
     } catch (error) {
       vscode.window.showErrorMessage(`删除全部失败: ${(error as Error).message}`);
     }
@@ -268,6 +326,7 @@ async function handleDeleteCommand(stagingManager: StagingManager): Promise<void
     vscode.window.showInformationMessage(
       `删除完成：已删除 ${result.deleted}，未找到 ${result.notFound}。`
     );
+    stagingViewProvider.refresh();
   } catch (error) {
     vscode.window.showErrorMessage(`删除失败: ${(error as Error).message}`);
   }
@@ -311,6 +370,66 @@ function buildEntryDetail(entry: StagingEntry): string {
   return segments.join(' | ');
 }
 
-export function deactivate(): void {
-  // no-op
+async function handleDeleteFromViewCommand(
+  stagingManager: StagingManager,
+  stagingViewProvider: StagingViewProvider,
+  items: StagingViewItem[]
+): Promise<void> {
+  const validItems = items.filter((item) => !item.entry.id.startsWith('__placeholder_'));
+  if (validItems.length === 0) {
+    return;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    `确定删除选中的 ${validItems.length} 个暂存文件吗？`,
+    { modal: true },
+    '删除'
+  );
+  if (confirm !== '删除') {
+    return;
+  }
+
+  try {
+    const result = await stagingManager.deleteEntriesByIds(validItems.map((item) => item.entry.id));
+    vscode.window.showInformationMessage(`删除完成：已删除 ${result.deleted}，未找到 ${result.notFound}。`);
+    stagingViewProvider.refresh();
+  } catch (error) {
+    vscode.window.showErrorMessage(`删除失败: ${(error as Error).message}`);
+  }
+}
+
+function collectViewSelection(
+  clickedItem: StagingViewItem | undefined,
+  selectedItems: StagingViewItem[] | undefined,
+  treeSelection: readonly StagingViewItem[]
+): StagingViewItem[] {
+  if (Array.isArray(selectedItems) && selectedItems.length > 0) {
+    return selectedItems;
+  }
+
+  if (clickedItem) {
+    return [clickedItem];
+  }
+
+  if (treeSelection.length > 0) {
+    return [...treeSelection];
+  }
+
+  return [];
+}
+
+export async function deactivate(): Promise<void> {
+  if (!deactivateState) {
+    return;
+  }
+
+  const { stagingManager, sessionId, heartbeatTimer } = deactivateState;
+  deactivateState = undefined;
+  clearInterval(heartbeatTimer);
+
+  try {
+    await stagingManager.unregisterSessionAndCleanupIfLast(sessionId);
+  } catch (error) {
+    console.error('[remote-file-transfer] deactivate cleanup failed', error);
+  }
 }
