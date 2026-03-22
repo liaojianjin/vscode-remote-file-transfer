@@ -106,7 +106,7 @@
       "view/item/context": [
         {
           "command": "remoteFileTransfer.deleteSingleStagedFile",
-          "when": "view == remoteFileTransfer.stagingView && viewItem == stagedEntry",
+          "when": "view == remoteFileTransfer.stagingView && (viewItem == stagedFile || viewItem == stagedFolder)",
           "group": "inline@1"
         }
       ],

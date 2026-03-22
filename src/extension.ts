@@ -563,13 +563,15 @@ async function handleDeleteFromViewCommand(
   stagingViewProvider: StagingViewProvider,
   items: StagingViewItem[]
 ): Promise<void> {
-  const validItems = items.filter((item) => !item.entry.id.startsWith('__placeholder_'));
-  if (validItems.length === 0) {
+  const selectedEntries = dedupeEntriesById(
+    items.filter((item) => item.kind !== 'placeholder').flatMap((item) => item.entries)
+  );
+  if (selectedEntries.length === 0) {
     return;
   }
 
   const confirm = await vscode.window.showWarningMessage(
-    `确定删除选中的 ${validItems.length} 个暂存文件吗？`,
+    `确定删除选中的 ${selectedEntries.length} 个暂存文件吗？`,
     { modal: true },
     '删除'
   );
@@ -578,7 +580,7 @@ async function handleDeleteFromViewCommand(
   }
 
   try {
-    const result = await stagingManager.deleteEntriesByIds(validItems.map((item) => item.entry.id));
+    const result = await stagingManager.deleteEntriesByIds(selectedEntries.map((entry) => entry.id));
     vscode.window.showInformationMessage(`删除完成：已删除 ${result.deleted}，未找到 ${result.notFound}。`);
     stagingViewProvider.refresh();
   } catch (error) {
