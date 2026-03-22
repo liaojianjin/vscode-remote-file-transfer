@@ -4,6 +4,7 @@ import { TransferBridge } from './TransferBridge';
 
 const CMD_STAGE = 'remoteFileTransfer.stageFiles';
 const CMD_FETCH = 'remoteFileTransfer.fetchFiles';
+const CMD_DELETE = 'remoteFileTransfer.deleteStagedFiles';
 
 interface EntryQuickPickItem extends vscode.QuickPickItem {
   entry: StagingEntry;
@@ -28,7 +29,11 @@ export function activate(context: vscode.ExtensionContext): void {
     await handleFetchCommand(stagingManager, transferBridge, targetFolderUri);
   });
 
-  context.subscriptions.push(stageDisposable, fetchDisposable);
+  const deleteDisposable = vscode.commands.registerCommand(CMD_DELETE, async () => {
+    await handleDeleteCommand(stagingManager);
+  });
+
+  context.subscriptions.push(stageDisposable, fetchDisposable, deleteDisposable);
 }
 
 async function handleStageCommand(
@@ -143,8 +148,8 @@ async function handleFetchCommand(
 
   const items: EntryQuickPickItem[] = entries.map((entry) => ({
     label: entry.filename,
-    description: entry.workspaceName,
-    detail: `${entry.remoteAuthority}${entry.path}`,
+    description: buildWorkspaceDescription(entry),
+    detail: buildEntryDetail(entry),
     entry
   }));
 
@@ -174,6 +179,100 @@ async function handleFetchCommand(
   }
 }
 
+async function handleDeleteCommand(stagingManager: StagingManager): Promise<void> {
+  let entries: StagingEntry[] = [];
+  try {
+    entries = await stagingManager.listEntries();
+  } catch (error) {
+    vscode.window.showErrorMessage(`读取全局池失败: ${(error as Error).message}`);
+    return;
+  }
+
+  if (entries.length === 0) {
+    vscode.window.showInformationMessage('全局池为空，无需删除。');
+    return;
+  }
+
+  const action = await vscode.window.showQuickPick(
+    [
+      {
+        label: '删除选中的暂存文件...',
+        value: 'partial'
+      },
+      {
+        label: '删除全部暂存文件',
+        value: 'all'
+      }
+    ],
+    {
+      placeHolder: '选择删除方式',
+      title: '🗑️ 删除全局池文件'
+    }
+  );
+
+  if (!action) {
+    return;
+  }
+
+  if (action.value === 'all') {
+    const confirm = await vscode.window.showWarningMessage(
+      `确定删除全局池中的全部 ${entries.length} 个文件吗？`,
+      { modal: true },
+      '删除全部'
+    );
+
+    if (confirm !== '删除全部') {
+      return;
+    }
+
+    try {
+      const deletedCount = await stagingManager.clearAllEntries();
+      vscode.window.showInformationMessage(`已删除 ${deletedCount} 个暂存文件。`);
+    } catch (error) {
+      vscode.window.showErrorMessage(`删除全部失败: ${(error as Error).message}`);
+    }
+    return;
+  }
+
+  const items: EntryQuickPickItem[] = entries.map((entry) => ({
+    label: entry.filename,
+    description: buildWorkspaceDescription(entry),
+    detail: buildEntryDetail(entry),
+    entry
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    placeHolder: '选择要删除的暂存文件',
+    matchOnDescription: true,
+    matchOnDetail: true,
+    title: '🗑️ 删除选中的暂存文件'
+  });
+
+  if (!picked || picked.length === 0) {
+    return;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    `确定删除选中的 ${picked.length} 个暂存文件吗？`,
+    { modal: true },
+    '删除'
+  );
+
+  if (confirm !== '删除') {
+    return;
+  }
+
+  try {
+    const result = await stagingManager.deleteEntriesByIds(picked.map((item) => item.entry.id));
+    vscode.window.showInformationMessage(
+      `删除完成：已删除 ${result.deleted}，未找到 ${result.notFound}。`
+    );
+  } catch (error) {
+    vscode.window.showErrorMessage(`删除失败: ${(error as Error).message}`);
+  }
+}
+
 function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vscode.Uri[] {
   const values = Array.isArray(selectedUris) && selectedUris.length > 0
     ? selectedUris
@@ -187,6 +286,21 @@ function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vs
   }
 
   return [...dedup.values()];
+}
+
+function buildWorkspaceDescription(entry: StagingEntry): string {
+  if (!entry.dockerContainer) {
+    return entry.workspaceName;
+  }
+  return `${entry.workspaceName} | Docker: ${entry.dockerContainer}`;
+}
+
+function buildEntryDetail(entry: StagingEntry): string {
+  const base = `${entry.remoteAuthority}${entry.path}`;
+  if (!entry.dockerContainer) {
+    return base;
+  }
+  return `${base} | 容器: ${entry.dockerContainer}`;
 }
 
 export function deactivate(): void {

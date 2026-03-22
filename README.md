@@ -57,6 +57,20 @@
 - 使用 `withProgress` 展示进度。
 - 拉取后保留缓存记录（不删除 `staging.json` 条目）。
 
+### 3) 删除暂存文件（🗑️ 删除全局池文件...）
+
+- 支持两种模式：
+  - 删除选中项（可多选）
+  - 清空全部暂存文件
+- 删除时会同时移除：
+  - `staging.json` 记录
+  - 本地 UUID 物理缓存文件
+
+### Docker 容器标识
+
+- 当文件来自 `attached-container` 或 `dev-container` 类型远程环境时，会在暂存记录中写入 `dockerContainer` 字段。
+- 在拉取和删除的 QuickPick 列表中会显示容器标识，便于区分来源容器。
+
 ## 并发与可靠性
 
 - 排他锁：通过创建 `.lock` 目录实现。

@@ -21,6 +21,7 @@ export interface StagingEntry {
   remoteAuthority: string;
   workspaceName: string;
   path: string;
+  dockerContainer?: string;
   timestamp: number;
 }
 
@@ -30,6 +31,7 @@ interface StageFileInput {
   remoteAuthority: string;
   workspaceName: string;
   path: string;
+  dockerContainer?: string;
 }
 
 export class StagingManager {
@@ -64,6 +66,7 @@ export class StagingManager {
         remoteAuthority: metadata.remoteAuthority,
         workspaceName: metadata.workspaceName,
         path: metadata.path,
+        dockerContainer: metadata.dockerContainer,
         timestamp: Date.now()
       };
 
@@ -116,6 +119,57 @@ export class StagingManager {
     return this.withLock(() => {
       this.ensureStorageReady();
       this.cleanupExpiredAndOrphansSync();
+    });
+  }
+
+  public async deleteEntriesByIds(ids: string[]): Promise<{ deleted: number; notFound: number }> {
+    return this.withLock(() => {
+      this.ensureStorageReady();
+      this.cleanupExpiredAndOrphansSync();
+
+      const targetIds = new Set(ids);
+      if (targetIds.size === 0) {
+        return { deleted: 0, notFound: 0 };
+      }
+
+      const entries = this.readDbSync();
+      const keptEntries: StagingEntry[] = [];
+      let deleted = 0;
+
+      for (const entry of entries) {
+        if (!targetIds.has(entry.id)) {
+          keptEntries.push(entry);
+          continue;
+        }
+
+        deleted += 1;
+        this.safeRemoveFile(this.getPhysicalFilePath(entry.id));
+      }
+
+      if (deleted > 0) {
+        this.writeDbSync(keptEntries);
+      }
+
+      return { deleted, notFound: targetIds.size - deleted };
+    });
+  }
+
+  public async clearAllEntries(): Promise<number> {
+    return this.withLock(() => {
+      this.ensureStorageReady();
+      this.cleanupExpiredAndOrphansSync();
+
+      const entries = this.readDbSync();
+      if (entries.length === 0) {
+        return 0;
+      }
+
+      for (const entry of entries) {
+        this.safeRemoveFile(this.getPhysicalFilePath(entry.id));
+      }
+
+      this.writeDbSync([]);
+      return entries.length;
     });
   }
 
@@ -306,6 +360,7 @@ export class StagingManager {
       typeof entry.remoteAuthority === 'string' &&
       typeof entry.workspaceName === 'string' &&
       typeof entry.path === 'string' &&
+      (typeof entry.dockerContainer === 'undefined' || typeof entry.dockerContainer === 'string') &&
       typeof entry.timestamp === 'number'
     );
   }

@@ -19,13 +19,15 @@ export class TransferBridge {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const workspaceName = vscode.workspace.getWorkspaceFolder(uri)?.name || 'Unknown';
     const filename = path.posix.basename(uri.path) || path.basename(uri.fsPath) || 'unnamed';
+    const dockerContainer = extractDockerContainer(uri.authority);
 
     return this.stagingManager.stageBinaryFile(bytes, {
       filename,
       size: bytes.byteLength,
       remoteAuthority: uri.authority,
       workspaceName,
-      path: uri.path
+      path: uri.path,
+      dockerContainer
     });
   }
 
@@ -148,4 +150,39 @@ function isNotFoundError(error: unknown): boolean {
   const message = (error as Error)?.message?.toLowerCase?.() || '';
   const code = (error as { code?: string })?.code;
   return code === 'FileNotFound' || message.includes('not found') || message.includes('no such file');
+}
+
+function extractDockerContainer(authority: string): string | undefined {
+  const plusIndex = authority.indexOf('+');
+  if (plusIndex <= 0 || plusIndex >= authority.length - 1) {
+    return undefined;
+  }
+
+  const remoteKind = authority.slice(0, plusIndex);
+  if (remoteKind !== 'attached-container' && remoteKind !== 'dev-container') {
+    return undefined;
+  }
+
+  const rawId = authority.slice(plusIndex + 1);
+  const decodedId = safeDecode(rawId).split('?')[0].trim();
+  if (!decodedId) {
+    return remoteKind;
+  }
+
+  return `${remoteKind}:${shorten(decodedId)}`;
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function shorten(value: string): string {
+  if (value.length <= 36) {
+    return value;
+  }
+  return `${value.slice(0, 24)}...${value.slice(-8)}`;
 }

@@ -30,7 +30,8 @@
   ],
   "activationEvents": [
     "onCommand:remoteFileTransfer.stageFiles",
-    "onCommand:remoteFileTransfer.fetchFiles"
+    "onCommand:remoteFileTransfer.fetchFiles",
+    "onCommand:remoteFileTransfer.deleteStagedFiles"
   ],
   "contributes": {
     "commands": [
@@ -42,6 +43,11 @@
       {
         "command": "remoteFileTransfer.fetchFiles",
         "title": "📥 从全局池拉取...",
+        "category": "Remote File Transfer"
+      },
+      {
+        "command": "remoteFileTransfer.deleteStagedFiles",
+        "title": "🗑️ 删除全局池文件...",
         "category": "Remote File Transfer"
       }
     ],
@@ -56,6 +62,11 @@
           "command": "remoteFileTransfer.fetchFiles",
           "group": "navigation@81",
           "when": "explorerViewletVisible && explorerResourceIsFolder && (resourceScheme == file || resourceScheme == vscode-remote)"
+        },
+        {
+          "command": "remoteFileTransfer.deleteStagedFiles",
+          "group": "navigation@82",
+          "when": "explorerViewletVisible && (resourceScheme == file || resourceScheme == vscode-remote)"
         }
       ],
       "commandPalette": [
@@ -65,6 +76,10 @@
         },
         {
           "command": "remoteFileTransfer.fetchFiles",
+          "when": "resourceScheme == file || resourceScheme == vscode-remote"
+        },
+        {
+          "command": "remoteFileTransfer.deleteStagedFiles",
           "when": "resourceScheme == file || resourceScheme == vscode-remote"
         }
       ]

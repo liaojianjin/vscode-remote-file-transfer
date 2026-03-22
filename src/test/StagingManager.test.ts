@@ -156,3 +156,63 @@ test('stale lock directory is forcefully taken over and removed', async (t) => {
   assert.equal(list.length, 1);
   assert.equal(fs.existsSync(lockPath), false);
 });
+
+test('deleteEntriesByIds deletes selected files only', async (t) => {
+  const poolName = createPoolName();
+  t.after(() => cleanupPool(poolName));
+
+  const manager = new StagingManager(poolName);
+  const first = await manager.stageBinaryFile(new Uint8Array([1]), {
+    filename: 'a.txt',
+    size: 1,
+    remoteAuthority: 'ssh-remote+alpha',
+    workspaceName: 'ws-a',
+    path: '/tmp/a.txt'
+  });
+  const second = await manager.stageBinaryFile(new Uint8Array([2]), {
+    filename: 'b.txt',
+    size: 1,
+    remoteAuthority: 'ssh-remote+alpha',
+    workspaceName: 'ws-a',
+    path: '/tmp/b.txt'
+  });
+
+  const result = await manager.deleteEntriesByIds([first.id, 'missing-id']);
+  assert.equal(result.deleted, 1);
+  assert.equal(result.notFound, 1);
+
+  const list = await manager.listEntries();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, second.id);
+  assert.equal(fs.existsSync(path.join(getFilesDir(poolName), first.id)), false);
+  assert.equal(fs.existsSync(path.join(getFilesDir(poolName), second.id)), true);
+});
+
+test('clearAllEntries removes every record and physical file', async (t) => {
+  const poolName = createPoolName();
+  t.after(() => cleanupPool(poolName));
+
+  const manager = new StagingManager(poolName);
+  const first = await manager.stageBinaryFile(new Uint8Array([1]), {
+    filename: 'a.txt',
+    size: 1,
+    remoteAuthority: 'ssh-remote+alpha',
+    workspaceName: 'ws-a',
+    path: '/tmp/a.txt'
+  });
+  const second = await manager.stageBinaryFile(new Uint8Array([2]), {
+    filename: 'b.txt',
+    size: 1,
+    remoteAuthority: 'ssh-remote+beta',
+    workspaceName: 'ws-b',
+    path: '/tmp/b.txt'
+  });
+
+  const deletedCount = await manager.clearAllEntries();
+  assert.equal(deletedCount, 2);
+
+  const list = await manager.listEntries();
+  assert.equal(list.length, 0);
+  assert.equal(fs.existsSync(path.join(getFilesDir(poolName), first.id)), false);
+  assert.equal(fs.existsSync(path.join(getFilesDir(poolName), second.id)), false);
+});
