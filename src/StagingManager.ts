@@ -19,9 +19,11 @@ export interface StagingEntry {
   filename: string;
   size: number;
   remoteAuthority: string;
+  remoteHost?: string;
   workspaceName: string;
   path: string;
   dockerContainer?: string;
+  dockerContainerId?: string;
   timestamp: number;
 }
 
@@ -29,9 +31,11 @@ interface StageFileInput {
   filename: string;
   size: number;
   remoteAuthority: string;
+  remoteHost?: string;
   workspaceName: string;
   path: string;
   dockerContainer?: string;
+  dockerContainerId?: string;
 }
 
 export class StagingManager {
@@ -64,9 +68,11 @@ export class StagingManager {
         filename: metadata.filename,
         size: metadata.size,
         remoteAuthority: metadata.remoteAuthority,
+        remoteHost: metadata.remoteHost,
         workspaceName: metadata.workspaceName,
         path: metadata.path,
         dockerContainer: metadata.dockerContainer,
+        dockerContainerId: metadata.dockerContainerId,
         timestamp: Date.now()
       };
 
@@ -358,9 +364,11 @@ export class StagingManager {
       typeof entry.filename === 'string' &&
       typeof entry.size === 'number' &&
       typeof entry.remoteAuthority === 'string' &&
+      (typeof entry.remoteHost === 'undefined' || typeof entry.remoteHost === 'string') &&
       typeof entry.workspaceName === 'string' &&
       typeof entry.path === 'string' &&
       (typeof entry.dockerContainer === 'undefined' || typeof entry.dockerContainer === 'string') &&
+      (typeof entry.dockerContainerId === 'undefined' || typeof entry.dockerContainerId === 'string') &&
       typeof entry.timestamp === 'number'
     );
   }

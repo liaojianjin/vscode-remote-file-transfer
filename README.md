@@ -69,7 +69,8 @@
 ### Docker 容器标识
 
 - 当文件来自 `attached-container` 或 `dev-container` 类型远程环境时，会在暂存记录中写入 `dockerContainer` 字段。
-- 在拉取和删除的 QuickPick 列表中会显示容器标识，便于区分来源容器。
+- 解析逻辑会优先尝试本地 `docker inspect` / `docker ps` 获取容器友好名。
+- 在拉取和删除的 QuickPick 列表中会显示 `Host + Docker` 来源信息，便于区分来源主机与容器。
 
 ## 并发与可靠性
 

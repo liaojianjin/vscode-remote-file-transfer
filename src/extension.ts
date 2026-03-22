@@ -289,18 +289,26 @@ function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vs
 }
 
 function buildWorkspaceDescription(entry: StagingEntry): string {
-  if (!entry.dockerContainer) {
-    return entry.workspaceName;
+  const segments = [entry.workspaceName];
+  if (entry.remoteHost) {
+    segments.push(`Host: ${entry.remoteHost}`);
   }
-  return `${entry.workspaceName} | Docker: ${entry.dockerContainer}`;
+  if (entry.dockerContainer) {
+    segments.push(`Docker: ${entry.dockerContainer}`);
+  }
+  return segments.join(' | ');
 }
 
 function buildEntryDetail(entry: StagingEntry): string {
   const base = `${entry.remoteAuthority}${entry.path}`;
-  if (!entry.dockerContainer) {
-    return base;
+  const segments = [base];
+  if (entry.remoteHost) {
+    segments.push(`主机: ${entry.remoteHost}`);
   }
-  return `${base} | 容器: ${entry.dockerContainer}`;
+  if (entry.dockerContainer) {
+    segments.push(`容器: ${entry.dockerContainer}`);
+  }
+  return segments.join(' | ');
 }
 
 export function deactivate(): void {

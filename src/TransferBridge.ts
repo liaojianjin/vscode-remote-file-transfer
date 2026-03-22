@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import * as vscode from 'vscode';
 import { StagingEntry, StagingManager } from './StagingManager';
 
@@ -11,6 +12,11 @@ export interface FetchSummary {
 }
 
 type ConflictAction = 'overwrite' | 'skip' | 'rename';
+interface SourceMetadata {
+  remoteHost?: string;
+  dockerContainer?: string;
+  dockerContainerId?: string;
+}
 
 export class TransferBridge {
   constructor(private readonly stagingManager: StagingManager) {}
@@ -19,15 +25,17 @@ export class TransferBridge {
     const bytes = await vscode.workspace.fs.readFile(uri);
     const workspaceName = vscode.workspace.getWorkspaceFolder(uri)?.name || 'Unknown';
     const filename = path.posix.basename(uri.path) || path.basename(uri.fsPath) || 'unnamed';
-    const dockerContainer = extractDockerContainer(uri.authority);
+    const sourceMetadata = resolveSourceMetadata(uri.authority);
 
     return this.stagingManager.stageBinaryFile(bytes, {
       filename,
       size: bytes.byteLength,
       remoteAuthority: uri.authority,
+      remoteHost: sourceMetadata.remoteHost,
       workspaceName,
       path: uri.path,
-      dockerContainer
+      dockerContainer: sourceMetadata.dockerContainer,
+      dockerContainerId: sourceMetadata.dockerContainerId
     });
   }
 
@@ -152,24 +160,137 @@ function isNotFoundError(error: unknown): boolean {
   return code === 'FileNotFound' || message.includes('not found') || message.includes('no such file');
 }
 
-function extractDockerContainer(authority: string): string | undefined {
+function resolveSourceMetadata(authority: string): SourceMetadata {
   const plusIndex = authority.indexOf('+');
   if (plusIndex <= 0 || plusIndex >= authority.length - 1) {
-    return undefined;
+    return {};
   }
 
   const remoteKind = authority.slice(0, plusIndex);
+  const rawPayload = authority.slice(plusIndex + 1);
+  const decodedPayload = safeDecode(rawPayload).split('?')[0].trim();
+  if (!decodedPayload) {
+    return {};
+  }
+
+  if (remoteKind === 'ssh-remote') {
+    return { remoteHost: decodedPayload };
+  }
+
   if (remoteKind !== 'attached-container' && remoteKind !== 'dev-container') {
+    return {};
+  }
+
+  const dockerContainerId = extractContainerId(decodedPayload);
+  const dockerContainerName = dockerContainerId
+    ? resolveDockerFriendlyName(dockerContainerId)
+    : undefined;
+  const remoteHost = extractRemoteHost(decodedPayload);
+
+  return {
+    remoteHost,
+    dockerContainerId,
+    dockerContainer: dockerContainerName || buildFallbackContainerLabel(remoteKind, dockerContainerId, decodedPayload)
+  };
+}
+
+function extractContainerId(payload: string): string | undefined {
+  const exactHex = payload.match(/[a-f0-9]{64}/i)?.[0];
+  if (exactHex) {
+    return exactHex.toLowerCase();
+  }
+
+  const shortHex = payload.match(/[a-f0-9]{12,63}/i)?.[0];
+  if (shortHex) {
+    return shortHex.toLowerCase();
+  }
+
+  return undefined;
+}
+
+function buildFallbackContainerLabel(kind: string, containerId: string | undefined, payload: string): string {
+  if (containerId) {
+    return `${kind}:${containerId.slice(0, 12)}`;
+  }
+  return `${kind}:${shorten(payload)}`;
+}
+
+function extractRemoteHost(payload: string): string | undefined {
+  const sshTokenMatch = payload.match(/ssh-remote\+([A-Za-z0-9._-]+)/);
+  if (sshTokenMatch) {
+    return safeDecode(sshTokenMatch[1]);
+  }
+
+  const urlHostMatch = payload.match(/ssh:\/\/[^@]+@([A-Za-z0-9._-]+)/);
+  if (urlHostMatch) {
+    return urlHostMatch[1];
+  }
+
+  const hostFieldMatch = payload.match(/(?:host|hostname)[:=]([A-Za-z0-9._-]+)/i);
+  if (hostFieldMatch) {
+    return hostFieldMatch[1];
+  }
+
+  return undefined;
+}
+
+const dockerNameCache = new Map<string, string | null>();
+
+function resolveDockerFriendlyName(containerId: string): string | undefined {
+  const cached = dockerNameCache.get(containerId);
+  if (typeof cached !== 'undefined') {
+    return cached || undefined;
+  }
+
+  const fromInspect = inspectDockerName(containerId);
+  if (fromInspect) {
+    dockerNameCache.set(containerId, fromInspect);
+    return fromInspect;
+  }
+
+  const fromPs = resolveDockerNameFromPs(containerId);
+  dockerNameCache.set(containerId, fromPs || null);
+  return fromPs;
+}
+
+function inspectDockerName(containerId: string): string | undefined {
+  try {
+    const output = execFileSync(
+      'docker',
+      ['inspect', '--format', '{{.Name}}', containerId],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 }
+    ).trim();
+    if (!output) {
+      return undefined;
+    }
+    return output.replace(/^\//, '');
+  } catch {
     return undefined;
   }
+}
 
-  const rawId = authority.slice(plusIndex + 1);
-  const decodedId = safeDecode(rawId).split('?')[0].trim();
-  if (!decodedId) {
-    return remoteKind;
+function resolveDockerNameFromPs(containerId: string): string | undefined {
+  try {
+    const output = execFileSync(
+      'docker',
+      ['ps', '-a', '--no-trunc', '--format', '{{.ID}}\\t{{.Names}}'],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 }
+    );
+
+    const lines = output.split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      const [id, name] = line.split('\t');
+      if (!id || !name) {
+        continue;
+      }
+      if (id.toLowerCase().startsWith(containerId.toLowerCase())) {
+        return name;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
   }
-
-  return `${remoteKind}:${shorten(decodedId)}`;
 }
 
 function safeDecode(value: string): string {

@@ -216,3 +216,26 @@ test('clearAllEntries removes every record and physical file', async (t) => {
   assert.equal(fs.existsSync(path.join(getFilesDir(poolName), first.id)), false);
   assert.equal(fs.existsSync(path.join(getFilesDir(poolName), second.id)), false);
 });
+
+test('persists remote host and docker source metadata', async (t) => {
+  const poolName = createPoolName();
+  t.after(() => cleanupPool(poolName));
+
+  const manager = new StagingManager(poolName);
+  await manager.stageBinaryFile(new Uint8Array([7]), {
+    filename: 'docker.txt',
+    size: 1,
+    remoteAuthority: 'attached-container+9f8a7b6c5d4e',
+    remoteHost: 'prod-jump-01',
+    workspaceName: 'ws-docker',
+    path: '/workspace/docker.txt',
+    dockerContainer: 'payments-api',
+    dockerContainerId: '9f8a7b6c5d4e1234567890abcdef1234567890abcdef1234567890abcdef1234'
+  });
+
+  const list = await manager.listEntries();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].remoteHost, 'prod-jump-01');
+  assert.equal(list[0].dockerContainer, 'payments-api');
+  assert.ok(list[0].dockerContainerId?.startsWith('9f8a7b6c5d4e'));
+});
