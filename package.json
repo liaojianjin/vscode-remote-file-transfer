@@ -12,6 +12,7 @@
     "clean": "rm -rf out",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "package": "npm run compile && npx @vscode/vsce package --allow-missing-repository",
     "pretest": "npm run compile",
     "test": "node --test \"out/test/**/*.test.js\""
   },
