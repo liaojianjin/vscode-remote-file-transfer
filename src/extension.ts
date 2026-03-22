@@ -349,9 +349,7 @@ function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vs
 
 function buildWorkspaceDescription(entry: StagingEntry): string {
   const segments = [entry.workspaceName];
-  if (entry.remoteHost) {
-    segments.push(`Host: ${entry.remoteHost}`);
-  }
+  segments.push(`Host: ${resolveHostForDisplay(entry)}`);
   if (entry.dockerContainer) {
     segments.push(`Docker: ${entry.dockerContainer}`);
   }
@@ -361,13 +359,42 @@ function buildWorkspaceDescription(entry: StagingEntry): string {
 function buildEntryDetail(entry: StagingEntry): string {
   const base = `${entry.remoteAuthority}${entry.path}`;
   const segments = [base];
-  if (entry.remoteHost) {
-    segments.push(`主机: ${entry.remoteHost}`);
-  }
+  segments.push(`主机: ${resolveHostForDisplay(entry)}`);
   if (entry.dockerContainer) {
     segments.push(`容器: ${entry.dockerContainer}`);
   }
   return segments.join(' | ');
+}
+
+function resolveHostForDisplay(entry: StagingEntry): string {
+  if (entry.remoteHost && entry.remoteHost.trim()) {
+    return entry.remoteHost;
+  }
+
+  const authority = entry.remoteAuthority;
+  const plusIndex = authority.indexOf('+');
+  if (plusIndex > 0 && plusIndex < authority.length - 1) {
+    const remoteKind = authority.slice(0, plusIndex);
+    const payload = safeDecode(authority.slice(plusIndex + 1));
+    if (remoteKind === 'ssh-remote') {
+      return payload;
+    }
+
+    const sshTokenMatch = payload.match(/ssh-remote\+([A-Za-z0-9._-]+)/);
+    if (sshTokenMatch) {
+      return safeDecode(sshTokenMatch[1]);
+    }
+  }
+
+  return 'Unknown';
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 async function handleDeleteFromViewCommand(

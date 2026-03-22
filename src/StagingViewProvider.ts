@@ -45,9 +45,7 @@ export class StagingViewProvider implements vscode.TreeDataProvider<StagingViewI
 
 function buildDescription(entry: StagingEntry): string {
   const segments = [entry.workspaceName];
-  if (entry.remoteHost) {
-    segments.push(`Host: ${entry.remoteHost}`);
-  }
+  segments.push(`Host: ${resolveHostForDisplay(entry)}`);
   if (entry.dockerContainer) {
     segments.push(`Docker: ${entry.dockerContainer}`);
   }
@@ -59,9 +57,7 @@ function buildTooltip(entry: StagingEntry): vscode.MarkdownString {
   md.appendMarkdown(`**${escapeMarkdown(entry.filename)}**  \n`);
   md.appendMarkdown(`- Workspace: ${escapeMarkdown(entry.workspaceName)}  \n`);
   md.appendMarkdown(`- Authority: ${escapeMarkdown(entry.remoteAuthority)}  \n`);
-  if (entry.remoteHost) {
-    md.appendMarkdown(`- Host: ${escapeMarkdown(entry.remoteHost)}  \n`);
-  }
+  md.appendMarkdown(`- Host: ${escapeMarkdown(resolveHostForDisplay(entry))}  \n`);
   if (entry.dockerContainer) {
     md.appendMarkdown(`- Docker: ${escapeMarkdown(entry.dockerContainer)}  \n`);
   }
@@ -87,6 +83,37 @@ function escapeMarkdown(value: string): string {
     .replace(/\*/g, '\\*')
     .replace(/_/g, '\\_')
     .replace(/`/g, '\\`');
+}
+
+function resolveHostForDisplay(entry: StagingEntry): string {
+  if (entry.remoteHost && entry.remoteHost.trim()) {
+    return entry.remoteHost;
+  }
+
+  const authority = entry.remoteAuthority;
+  const plusIndex = authority.indexOf('+');
+  if (plusIndex > 0 && plusIndex < authority.length - 1) {
+    const remoteKind = authority.slice(0, plusIndex);
+    const payload = safeDecode(authority.slice(plusIndex + 1));
+    if (remoteKind === 'ssh-remote') {
+      return payload;
+    }
+
+    const sshTokenMatch = payload.match(/ssh-remote\+([A-Za-z0-9._-]+)/);
+    if (sshTokenMatch) {
+      return safeDecode(sshTokenMatch[1]);
+    }
+  }
+
+  return 'Unknown';
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function emptyPlaceholderEntry(): StagingEntry {
