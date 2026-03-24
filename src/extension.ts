@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { randomUUID } from 'node:crypto';
-import { MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB, StagingEntry, StagingManager } from './StagingManager';
+import { DEFAULT_MAX_FILE_SIZE_MB, StagingEntry, StagingManager } from './StagingManager';
 import { TransferBridge } from './TransferBridge';
 import { StagingViewItem, StagingViewProvider } from './StagingViewProvider';
 
@@ -9,7 +9,12 @@ const CMD_FETCH = 'remoteFileTransfer.fetchFiles';
 const CMD_DELETE = 'remoteFileTransfer.deleteStagedFiles';
 const CMD_DELETE_ONE = 'remoteFileTransfer.deleteSingleStagedFile';
 const CMD_REFRESH_VIEW = 'remoteFileTransfer.refreshStagingView';
+const STAGING_VIEW_ID = 'remoteFileTransfer.stagingView';
+const CONFIG_SECTION = 'remoteFileTransfer';
+const CONFIG_MAX_TRANSFER_FILE_SIZE_MB = 'maxTransferFileSizeMB';
 const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
+
+let outputChannel: vscode.OutputChannel | undefined;
 
 interface GroupQuickPickItem extends vscode.QuickPickItem {
   entries: StagingEntry[];
@@ -28,6 +33,35 @@ interface DirectoryCollectResult {
   failed: number;
 }
 
+class StagingViewDragAndDropController implements vscode.TreeDragAndDropController<StagingViewItem> {
+  public readonly dropMimeTypes = ['text/uri-list'];
+  public readonly dragMimeTypes: string[] = [];
+
+  constructor(private readonly stageDroppedUris: (uris: vscode.Uri[]) => Promise<void>) {}
+
+  public async handleDrop(
+    _target: StagingViewItem | undefined,
+    dataTransfer: vscode.DataTransfer
+  ): Promise<void> {
+    logInfo('handleDrop invoked');
+    const uriListItem = dataTransfer.get('text/uri-list');
+    if (!uriListItem) {
+      logInfo('handleDrop ignored, no text/uri-list');
+      return;
+    }
+
+    const rawUriList = await uriListItem.asString();
+    const uris = parseUriList(rawUriList);
+    if (uris.length === 0) {
+      logInfo('handleDrop ignored, parsed uri list is empty');
+      return;
+    }
+
+    logInfo(`handleDrop stage incoming uriCount=${uris.length}`);
+    await this.stageDroppedUris(uris);
+  }
+}
+
 let deactivateState:
   | {
       stagingManager: StagingManager;
@@ -37,17 +71,34 @@ let deactivateState:
   | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  outputChannel = vscode.window.createOutputChannel('Remote File Transfer');
+  logInfo('activate started');
+
   const stagingManager = new StagingManager();
   const transferBridge = new TransferBridge(stagingManager);
   const stagingViewProvider = new StagingViewProvider(stagingManager);
-  const stagingTreeView = vscode.window.createTreeView('remoteFileTransfer.stagingView', {
+  const dragAndDropController = new StagingViewDragAndDropController(async (uris) => {
+    await stageUris(transferBridge, stagingViewProvider, uris, false);
+  });
+  const stagingTreeView = vscode.window.createTreeView(STAGING_VIEW_ID, {
     treeDataProvider: stagingViewProvider,
-    canSelectMany: true
+    canSelectMany: true,
+    dragAndDropController
   });
 
   void stagingManager.cleanupExpiredAndOrphans().catch((error) => {
     console.error('[remote-file-transfer] cleanup on activate failed', error);
+    logError('cleanupExpiredAndOrphans failed on activate', error);
   });
+  const explorerDragAndDropEnabled = vscode.workspace
+    .getConfiguration('explorer')
+    .get<boolean>('enableDragAndDrop', true);
+  logInfo(`explorer.enableDragAndDrop=${explorerDragAndDropEnabled}`);
+  if (!explorerDragAndDropEnabled) {
+    void vscode.window.showWarningMessage(
+      '当前 explorer.enableDragAndDrop=false，可能导致无法将资源管理器文件拖到暂存池。'
+    );
+  }
   stagingViewProvider.refresh();
 
   const sessionId = randomUUID();
@@ -89,6 +140,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   context.subscriptions.push(
+    outputChannel,
     stageDisposable,
     fetchDisposable,
     deleteDisposable,
@@ -106,11 +158,24 @@ async function handleStageCommand(
   selectedUris?: vscode.Uri[]
 ): Promise<void> {
   const uris = normalizeUris(clickedUri, selectedUris);
+  await stageUris(transferBridge, stagingViewProvider, uris, true);
+}
+
+async function stageUris(
+  transferBridge: TransferBridge,
+  stagingViewProvider: StagingViewProvider,
+  uris: vscode.Uri[],
+  showEmptySelectionMessage: boolean
+): Promise<void> {
   if (uris.length === 0) {
-    vscode.window.showInformationMessage('未找到可暂存的文件。');
+    if (showEmptySelectionMessage) {
+      vscode.window.showInformationMessage('未找到可暂存的文件。');
+    }
     return;
   }
 
+  const maxFileSizeMb = getMaxTransferFileSizeMb();
+  const maxFileSizeBytes = mbToBytes(maxFileSizeMb);
   const candidates: StageCandidate[] = [];
   let success = 0;
   let processedDirectories = 0;
@@ -159,7 +224,7 @@ async function handleStageCommand(
   for (const candidate of candidates) {
     try {
       const stat = await vscode.workspace.fs.stat(candidate.uri);
-      if (stat.size > MAX_FILE_SIZE_BYTES) {
+      if (stat.size > maxFileSizeBytes) {
         skippedOversize += 1;
         continue;
       }
@@ -189,7 +254,7 @@ async function handleStageCommand(
     segments.push(`已跳过 ${skippedUnsupported} 个非文件资源。`);
   }
   if (skippedOversize > 0) {
-    segments.push(`已跳过 ${skippedOversize} 个超过 ${MAX_FILE_SIZE_MB}MB 的文件。`);
+    segments.push(`已跳过 ${skippedOversize} 个超过 ${formatMb(maxFileSizeMb)}MB 的文件。`);
   }
   if (failed > 0) {
     segments.push(`失败 ${failed} 个。`);
@@ -373,6 +438,48 @@ function normalizeUris(clickedUri?: vscode.Uri, selectedUris?: vscode.Uri[]): vs
   }
 
   return [...dedup.values()];
+}
+
+
+function parseUriList(rawValue: string): vscode.Uri[] {
+  const lines = rawValue.split(/\r?\n/).map((line) => line.trim());
+  const uris: vscode.Uri[] = [];
+  for (const line of lines) {
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+
+    try {
+      uris.push(vscode.Uri.parse(line));
+    } catch {
+      // ignore malformed uri list entries
+    }
+  }
+  return uris;
+}
+
+function getMaxTransferFileSizeMb(): number {
+  const rawValue = vscode.workspace
+    .getConfiguration(CONFIG_SECTION)
+    .get<number>(CONFIG_MAX_TRANSFER_FILE_SIZE_MB, DEFAULT_MAX_FILE_SIZE_MB);
+
+  if (typeof rawValue !== 'number' || !Number.isFinite(rawValue) || rawValue <= 0) {
+    return DEFAULT_MAX_FILE_SIZE_MB;
+  }
+
+  return rawValue;
+}
+
+function mbToBytes(valueMb: number): number {
+  return Math.floor(valueMb * 1024 * 1024);
+}
+
+function formatMb(valueMb: number): string {
+  if (Number.isInteger(valueMb)) {
+    return String(valueMb);
+  }
+
+  return valueMb.toFixed(2).replace(/\.?0+$/, '');
 }
 
 async function collectFilesFromDirectory(
@@ -622,4 +729,13 @@ export async function deactivate(): Promise<void> {
   } catch (error) {
     console.error('[remote-file-transfer] deactivate cleanup failed', error);
   }
+}
+
+function logInfo(message: string): void {
+  outputChannel?.appendLine(`[INFO ${new Date().toISOString()}] ${message}`);
+}
+
+function logError(message: string, error: unknown): void {
+  const detail = error instanceof Error ? `${error.message}\n${error.stack || ''}` : String(error);
+  outputChannel?.appendLine(`[ERROR ${new Date().toISOString()}] ${message}\n${detail}`);
 }

@@ -44,10 +44,11 @@
 ### 1) 暂存文件（📤 暂存到全局池）
 
 - 入口：资源管理器右键文件或目录。
+- 支持从 Explorer 直接拖拽文件/目录到 `Global Staging Pool` 视图进行暂存。
 - 支持多选。
 - 目录会递归扫描并暂存目录内文件，自动保留相对路径。
 - 自动过滤软链。
-- 文件大小上限：`50MB`（`MAX_FILE_SIZE_MB`）。
+- 文件大小上限：可通过 `remoteFileTransfer.maxTransferFileSizeMB` 配置（默认 `50MB`）。
 - 读取远端文件：`vscode.workspace.fs.readFile`（`Uint8Array`）。
 - 写入本地缓存：按二进制写入 UUID 文件，不做文本编码转换。
 - 完成后显示汇总提示（成功/跳过/失败）。
@@ -81,6 +82,13 @@
   - 刷新
   - 删除全局池文件
 - 视图条目支持右键删除文件或目录（目录会删除其下全部暂存文件）。
+
+### 5) 可配置最大传输文件大小
+
+- 配置项：`remoteFileTransfer.maxTransferFileSizeMB`
+- 类型：`number`
+- 默认值：`50`
+- 作用范围：单个文件“暂存到全局池”时的大小上限检查（包括右键暂存与拖拽暂存）。
 
 ### Docker 容器标识
 
@@ -137,7 +145,7 @@ npm run package
 
 ## 注意事项
 
-- 大文件（>50MB）会被拦截。
+- 超过 `remoteFileTransfer.maxTransferFileSizeMB` 的文件会被拦截。
 - 建议后续增加 `.vscodeignore` 或 `package.json.files` 以缩小 VSIX 体积。
 
 ## License

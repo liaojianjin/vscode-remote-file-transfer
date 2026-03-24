@@ -3,8 +3,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-export const MAX_FILE_SIZE_MB = 50;
-export const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+export const DEFAULT_MAX_FILE_SIZE_MB = 50;
+export const DEFAULT_MAX_FILE_SIZE_BYTES = DEFAULT_MAX_FILE_SIZE_MB * 1024 * 1024;
+export const MAX_FILE_SIZE_MB = DEFAULT_MAX_FILE_SIZE_MB;
+export const MAX_FILE_SIZE_BYTES = DEFAULT_MAX_FILE_SIZE_BYTES;
 export const TTL_HOURS = 24;
 
 const TTL_MS = TTL_HOURS * 60 * 60 * 1000;

@@ -9,6 +9,9 @@ interface StagingViewItemOptions {
   kind: StagingViewItemKind;
   label: string;
   entries: StagingEntry[];
+  batchId?: string;
+  rootFolderName?: string;
+  folderRelativePath?: string;
   description?: string;
   tooltip?: vscode.MarkdownString;
   children?: StagingViewItem[];
@@ -26,6 +29,9 @@ export class StagingViewItem extends vscode.TreeItem {
   public readonly kind: StagingViewItemKind;
   public readonly entries: StagingEntry[];
   public readonly children: StagingViewItem[];
+  public readonly batchId?: string;
+  public readonly rootFolderName?: string;
+  public readonly folderRelativePath?: string;
 
   constructor(options: StagingViewItemOptions) {
     super(
@@ -39,6 +45,9 @@ export class StagingViewItem extends vscode.TreeItem {
     this.kind = options.kind;
     this.entries = options.entries;
     this.children = options.children ?? [];
+    this.batchId = options.batchId;
+    this.rootFolderName = options.rootFolderName;
+    this.folderRelativePath = options.folderRelativePath;
     this.description = options.description;
     this.tooltip = options.tooltip;
 
@@ -213,6 +222,9 @@ function buildFolderItem(
     kind: 'folder',
     label: folderLabel,
     entries: allEntries,
+    batchId: sourceEntry.batchId,
+    rootFolderName: sourceEntry.rootFolderName,
+    folderRelativePath: buildFolderRelativePath(sourceEntry.rootFolderName, node.path),
     description: descriptionSegments.join(' | '),
     tooltip: buildFolderTooltip(folderLabel, allEntries, sourceEntry, options.isBatchRoot),
     children
@@ -262,6 +274,23 @@ function buildSourceDescription(entry: StagingEntry): string {
     segments.push(`Docker: ${entry.dockerContainer}`);
   }
   return segments.join(' | ');
+}
+
+function buildFolderRelativePath(rootFolderName: string | undefined, nodePath: string): string | undefined {
+  if (!rootFolderName) {
+    return undefined;
+  }
+
+  const normalizedRoot = rootFolderName.replace(/^\/+|\/+$/g, '');
+  const normalizedNode = nodePath.replace(/^\/+|\/+$/g, '');
+  if (normalizedNode === normalizedRoot) {
+    return '';
+  }
+  if (!normalizedNode.startsWith(`${normalizedRoot}/`)) {
+    return undefined;
+  }
+
+  return normalizedNode.slice(normalizedRoot.length + 1);
 }
 
 function buildFolderTooltip(
